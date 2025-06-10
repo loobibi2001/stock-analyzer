@@ -25,7 +25,7 @@ jobs:
           sed -i "s|finmind_api_token = \".*\"|finmind_api_token = os.environ.get('FINMIND_API_TOKEN')|" update_stocks_daily.py
           sed -i '1s/^/import os\n/' update_stocks_daily.py
           sed -i "s|base_path = r\".*\"|base_path = '.'|" convert_csv_to_parquet.py
-          sed -i "s|base_dir = r\".*\"|base_dir = '.'|" "daily_trader封神名號：混沌神王．極速終焉 (Chaos King, Velocity_s End).py"
+          sed -i "s|base_dir = r\".*\"|base_dir = '.'|" "daily_trader_main.py"
 
       - name: Run Data Update
         run: python update_stocks_daily.py
@@ -36,9 +36,8 @@ jobs:
         run: python convert_csv_to_parquet.py
 
       - name: Run Main Analysis
-        run: python "daily_trader封神名號：混沌神王．極速終焉 (Chaos King, Velocity_s End).py"
+        run: python "daily_trader_main.py"
 
-      # 請注意：這裡也要修改檔名！
       - name: Commit and push changes
         run: |
           git config --global user.name 'github-actions[bot]'
