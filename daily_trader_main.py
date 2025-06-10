@@ -81,7 +81,6 @@ def prep_data(stock_id: str, df_raw: pd.DataFrame, min_required_len: int) -> Opt
     if df.empty: return None
     df = df.sort_values(by='date').set_index('date')
     required = ['high', 'low', 'close', 'open', 'volume']
-    # 這裡使用 pd.isna() 而不是直接的 NaN，這是正確的
     if not all(col in df.columns for col in required) or df[required].isnull().values.any(): return None
     return df
 
@@ -141,7 +140,6 @@ def check_entry_signal(df: pd.DataFrame, inds_cfg: IndParams, strat_cfg: StratCf
     required_cols = ['macd_hist_d', 'macd_hist_d_prev', 'adx_d', 'adx_d_prev', 'rsi_d', 'atr_d', 'volume']
     if filter_cfg.use_w_macd: required_cols.append('macd_hist_w')
     if filter_cfg.use_vol: required_cols.append('vol_sma')
-    # 這裡使用 pd.isna() 而不是直接的 NaN，這是正確的
     if any(pd.isna(latest.get(col)) for col in required_cols): return False
 
     cond_macd_xo = latest['macd_hist_d'] > 0 and latest['macd_hist_d_prev'] <= 0
@@ -176,12 +174,10 @@ def check_exit_signal(df: pd.DataFrame, pos: Position, inds_cfg: IndParams, stra
         return f"觸發初始停損@{pos.initial_stop_loss_price:.2f}"
         
     if strat_cfg.use_macd_dx_exit:
-        # 這裡使用 pd.notna()，這是正確的
         if pd.notna(latest.get('macd_hist_d')) and pd.notna(latest.get('macd_hist_d_prev')) and \
            latest['macd_hist_d'] < 0 and latest['macd_hist_d_prev'] >= 0:
             return "觸發日線MACD死叉"
     
-    # 這裡使用 pd.notna()，這是正確的
     if pd.notna(latest.get('rsi_d')) and latest['rsi_d'] < strat_cfg.rsi_exit_th:
         return f"觸發RSI低於{strat_cfg.rsi_exit_th}"
 
@@ -204,7 +200,7 @@ def load_portfolio(path: str, manual_portfolio: Dict[str, Position]) -> Dict[str
 def save_portfolio(path: str, portfolio: Dict[str, Position]):
     with open(path, 'w', encoding='utf-8') as f:
         data_to_save = {stock_id: asdict(pos) for stock_id, pos in portfolio.items()}
-        json.dump(data_to_save, f, indent=4, ensure_ascii=False)
+        json.dump(data_to_save, f, indent=4, ensure_ascii=False) # json.dump 支持 ensure_ascii
 
 def create_position_from_manual_input(manual_input: Dict[str, Dict[str, Any]], paths: Paths, inds_cfg: IndParams, stop_cfg: StopCfg, filter_cfg: FilterCfg) -> Position:
     stock_id = manual_input['stock_id']
@@ -236,7 +232,6 @@ def create_position_from_manual_input(manual_input: Dict[str, Dict[str, Any]], p
 
 
     atr_at_entry = trade_day_data['atr_d']
-    # 這裡使用 pd.isna()，這是正確的
     if pd.isna(atr_at_entry):
         raise ValueError(f"在 {entry_date} 無法計算 {stock_id} 的ATR值，請檢查數據。")
 
@@ -273,6 +268,9 @@ def run_daily_scan(paths: Paths, inds_cfg: IndParams, strat_cfg: StratCfg, stop_
     report.append("\n--- (1) 檢視戰場 (出場掃描) ---")
     if not current_holdings_ids: report.append("英靈殿中尚無戰士。")
     
+    # 需要一個地方儲存所有股票的最新數據，以便在生成訊號時獲取價格
+    all_stock_data_latest_close = {} 
+
     for stock_id in current_holdings_ids:
         pos = portfolio[stock_id]
         parquet_path = os.path.join(paths.data_dir, f"{stock_id}_history.parquet")
@@ -293,6 +291,9 @@ def run_daily_scan(paths: Paths, inds_cfg: IndParams, strat_cfg: StratCfg, stop_
 
         exit_reason = check_exit_signal(df_inds, pos, inds_cfg, strat_cfg, stop_cfg)
         
+        # 儲存最新的收盤價
+        all_stock_data_latest_close[stock_id] = df_inds.iloc[-1]['close']
+
         if exit_reason:
             exits_today.append((stock_id, exit_reason))
             report.append(f"[撤退] {stock_id}: {exit_reason}")
@@ -321,6 +322,9 @@ def run_daily_scan(paths: Paths, inds_cfg: IndParams, strat_cfg: StratCfg, stop_
         if df_inds.empty or len(df_inds) < 2:
             logger.warning(f"潛在勇士 {stock_id} 指標計算後數據不足，跳過進場檢查。")
             continue
+
+        # 儲存最新的收盤價，即使沒有進場訊號也保存
+        all_stock_data_latest_close[stock_id] = df_inds.iloc[-1]['close']
 
         if check_entry_signal(df_inds, inds_cfg, strat_cfg, filter_cfg):
             latest_price = df_inds.iloc[-1]['close']
@@ -367,9 +371,7 @@ def run_daily_scan(paths: Paths, inds_cfg: IndParams, strat_cfg: StratCfg, stop_
     trade_signals_output = []
     # 添加出場訊號
     for stock_id, reason in exits_today:
-        # 從 portfolio 取得最近的價格，如果股票還在 portfolio 中 (即沒賣出成功)
-        # 這裡的邏輯需要您根據實際數據流確定是取當日收盤價還是什麼
-        current_price = df_prep.iloc[-1]['close'] if stock_id in all_stock_data and not all_stock_data[stock_id].empty else 0.0
+        current_price = all_stock_data_latest_close.get(stock_id, 0.0) # 使用儲存的最新價格
         trade_signals_output.append({
             "股票代號": stock_id,
             "日期": today_str,
@@ -388,13 +390,14 @@ def run_daily_scan(paths: Paths, inds_cfg: IndParams, strat_cfg: StratCfg, stop_
             "理由": "符合策略進場條件"
         })
 
-    # 如果沒有任何進出場訊號，但您希望 portfolio_berserker.json 始終存在
-    if not trade_signals_output:
-        # 可以選擇性地寫入一個空的 DataFrame 或者一個包含提示的 DataFrame
-        # 例如，寫入一個空的，app.py 會處理它
-        pd.DataFrame().to_json(paths.portfolio_path, orient="records", indent=4, ensure_ascii=False)
+    # 將 trade_signals_output 轉換為 DataFrame，然後保存為 JSON
+    signals_df_for_json = pd.DataFrame(trade_signals_output)
+    
+    if signals_df_for_json.empty:
+        # 如果沒有任何訊號，寫入一個空的 JSON 陣列
+        signals_df_for_json.to_json(paths.portfolio_path, orient="records", indent=4) # 移除 ensure_ascii=False
     else:
-        pd.DataFrame(trade_signals_output).to_json(paths.portfolio_path, orient="records", indent=4, ensure_ascii=False)
+        signals_df_for_json.to_json(paths.portfolio_path, orient="records", indent=4) # 移除 ensure_ascii=False
 
 
     save_portfolio(paths.portfolio_path, portfolio) # 保存更新後的持股狀態
