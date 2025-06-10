@@ -4,3 +4,4 @@ pyarrow
 FinMind
 numpy
 matplotlib
+tqdm
