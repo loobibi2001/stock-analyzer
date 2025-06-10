@@ -34,7 +34,8 @@ jobs:
           ./configure --prefix=/usr
           make
           sudo make install
-      
+          sudo ldconfig    # <--- 我們在這裡加上了這一行！
+
       - name: Install Python dependencies
         run: |
           pip install numpy pandas yfinance ta-lib
