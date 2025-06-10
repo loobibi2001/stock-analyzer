@@ -26,7 +26,6 @@ jobs:
         with:
           python-version: '3.10'
 
-      # 步驟一：我們回到手動編譯，這是最可靠的取得 C 函式庫的方式
       - name: Install TA-Lib from Source
         run: |
           wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz
@@ -36,13 +35,11 @@ jobs:
           make
           sudo make install
 
-      # 步驟二：安裝 Python 套件時，明確指定 C 函式庫的路徑
-      - name: Install Python dependencies with TA-Lib path
-        env:
-          TA_INCLUDE_PATH: /usr/include
-          TA_LIBRARY_PATH: /usr/lib
+      # 最終安裝嘗試：強制使用舊版安裝模式
+      - name: Install Python dependencies (Final Attempt)
         run: |
-          pip install numpy pandas yfinance ta-lib
+          pip install numpy pandas yfinance
+          pip install --no-use-pep517 TA-Lib
 
       - name: Download Stock Data
         run: python main.py
