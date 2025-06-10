@@ -6,7 +6,7 @@ on:
     branches:
       - main
   schedule:
-    - cron: '0 9 * * 1-5' # UTC time, 9:00 UTC is 17:00 in Taiwan (CST)
+    - cron: '0 9 * * 1-5' # 台灣時間下午 5 點
 
 permissions:
   contents: write
@@ -16,36 +16,43 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
+      # 步驟一：Checkout 專案，並使用內建的 GITHUB_TOKEN 來授權後續的 git push
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          # 我們需要抓取 token 才能夠推送更新
-          token: ${{ secrets.API_TOKEN_NAME }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
+      # 步驟二：設定 Python 環境
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
+      # 步驟三：安裝 Python 套件
       - name: Install Python dependencies
         run: |
-          # 因為不再需要 TA-Lib，安裝過程變得非常簡單快速
           pip install numpy pandas yfinance
 
+      # 步驟四：執行下載腳本，並透過 env 提供 API Token
       - name: Download Stock Data
+        env:
+          FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
         run: python main.py
 
+      # 步驟五：執行資料轉換腳本
       - name: Convert Data Format
         run: python data_converter.py
 
+      # 步驟六：執行策略分析腳本
       - name: Run Berserker Strategy
         run: python strategy_berserker.py
 
+      # 步驟七：將變動的檔案 commit 並 push 回倉庫
       - name: Commit and push if there are changes
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           git add logs/ portfolio_berserker.json
-          # 如果沒有變動，指令會失敗，所以加上 || true 來忽略錯誤
+          # 如果沒有變動，commit 會失敗，加上 || true 來忽略錯誤，讓流程繼續
           git commit -m "📈 Daily analysis core update" || true
           git push || true
