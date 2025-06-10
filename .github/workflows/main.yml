@@ -8,6 +8,11 @@ on:
 jobs:
   build-and-run:
     runs-on: ubuntu-latest
+    
+    # <<<<< 賦予這個工作寫入 repo 的權限 >>>>>
+    permissions:
+      contents: write
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
