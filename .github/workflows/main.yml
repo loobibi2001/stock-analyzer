@@ -26,15 +26,11 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install TA-Lib
+      # --- 我們將原本的安裝區塊替換成下面這個更穩定的版本 ---
+      - name: Install TA-Lib C-Library via apt
         run: |
-          wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz
-          tar -xzf ta-lib-0.4.0-src.tar.gz
-          cd ta-lib/
-          ./configure --prefix=/usr
-          make
-          sudo make install
-          sudo ldconfig    # <--- 我們在這裡加上了這一行！
+          sudo apt-get update
+          sudo apt-get install -y libta-lib-dev
 
       - name: Install Python dependencies
         run: |
