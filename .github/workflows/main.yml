@@ -37,9 +37,11 @@ jobs:
           make
           sudo make install
 
-      # 步驟 4: 安裝所有必要的 Python 套件
+      # 步驟 4: 安裝所有必要的 Python 套件 (包含升級指令)
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          pip install --upgrade pip setuptools wheel
+          pip install -r requirements.txt
 
       # 步驟 5: 動態修改 Python 腳本以適應雲端環境
       - name: Modify Scripts for Actions Environment
@@ -73,5 +75,7 @@ jobs:
             echo "No changes to commit."
           else
             git commit -m "📈 Daily analysis report"
+            git push
+          fi
             git push
           fi
