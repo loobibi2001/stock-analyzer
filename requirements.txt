@@ -1,0 +1,6 @@
+pandas
+talib-binary
+pyarrow
+FinMind
+numpy
+matplotlib
