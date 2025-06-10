@@ -1,6 +1,6 @@
 pandas
 pandas-ta
-numpy==1.23.5
+numpy
 pyarrow
 FinMind
 matplotlib
