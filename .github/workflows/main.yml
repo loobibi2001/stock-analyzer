@@ -26,19 +26,25 @@ jobs:
         with:
           python-version: '3.10'
 
-      # --- 我們將原本的安裝區塊替換成下面這個更穩定的版本 ---
-      - name: Install TA-Lib C-Library via apt
+      # 步驟一：我們回到手動編譯，這是最可靠的取得 C 函式庫的方式
+      - name: Install TA-Lib from Source
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libta-lib-dev
+          wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz
+          tar -xzf ta-lib-0.4.0-src.tar.gz
+          cd ta-lib/
+          ./configure --prefix=/usr
+          make
+          sudo make install
 
-      - name: Install Python dependencies
+      # 步驟二：安裝 Python 套件時，明確指定 C 函式庫的路徑
+      - name: Install Python dependencies with TA-Lib path
+        env:
+          TA_INCLUDE_PATH: /usr/include
+          TA_LIBRARY_PATH: /usr/lib
         run: |
           pip install numpy pandas yfinance ta-lib
 
       - name: Download Stock Data
-        env:
-          API_TOKEN_NAME: ${{ secrets.API_TOKEN_NAME }}
         run: python main.py
 
       - name: Convert Data Format
@@ -53,7 +59,7 @@ jobs:
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: '.' # 上傳整個根目錄，確保 index.html 被包含
+          path: '.' 
 
       - name: Commit and push if there are changes
         run: |
