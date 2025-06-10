@@ -5,7 +5,7 @@ import time
 print("--- CSV 轉 Parquet 轉換腳本開始執行 ---")
 
 # --- 設定 ---
-base_path = r"D:\飆股篩選"  # <--- 請確認這是您的基礎路徑
+base_path = '.'  # <--- 請確認這是您的基礎路徑
 input_csv_folder_name = "StockData_FinMind"  # 來源 CSV 資料夾名稱
 output_parquet_folder_name = "StockData_Parquet" # <--- 這是新的 Parquet 儲存資料夾
 

@@ -320,7 +320,7 @@ def run_daily_scan(paths: Paths, inds_cfg: IndParams, strat_cfg: StratCfg, stop_
 
 
 if __name__ == '__main__':
-    base_dir = r"D:\飆股篩選" # 這行在 Actions 中會被 sed 取代
+    base_dir = '.' # 這行在 Actions 中會被 sed 取代
     paths_config = Paths(base=base_dir)
     
     if not os.path.exists(paths_config.log_dir): os.makedirs(paths_config.log_dir)

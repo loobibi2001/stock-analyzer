@@ -1,3 +1,4 @@
+import os
 from FinMind.data import DataLoader
 import os
 import pandas as pd
@@ -8,7 +9,7 @@ print(f"--- 每日更新腳本開始執行 (FinMind API - 付費版, D槽路徑)
 
 # --- 設定 ---
 # 【請務必填入您自己的 FinMind API Token】
-finmind_api_token = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJkYXRlIjoiMjAyNS0wNS0yNSAxODo0MzozMSIsInVzZXJfaWQiOiJsb29iaWJpMjAwMSIsImlwIjoiMTE0LjQ3LjE1MS4xNTIifQ.DlJCvlAcFZBsFVuSja0VpVxX1AsH3MdFE-s32HAMfhA" 
+finmind_api_token = os.environ.get('FINMIND_API_TOKEN') 
 
 # --- 【【【路徑變更部分】】】 ---
 base_path = r"D:\飆股篩選" 
