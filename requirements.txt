@@ -1,7 +1,7 @@
 pandas
-pandas-ta
+pandas-ta>=0.3.14b0
+numpy>=1.23.0
 pyarrow
 FinMind
-numpy
 matplotlib
 tqdm
