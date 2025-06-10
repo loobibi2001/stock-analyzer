@@ -28,10 +28,14 @@ jobs:
           python-version: '3.10'
 
       # 步驟 3: 安裝 TA-Lib 的系統依賴 (這是為了解決上次的錯誤)
-      - name: Install TA-Lib
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ta-lib-dev
+      - name: Install TA-Lib from source
+  run: |
+    wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz
+    tar -xzf ta-lib-0.4.0-src.tar.gz
+    cd ta-lib/
+    ./configure --prefix=/usr
+    make
+    sudo make install
 
       # 步驟 4: 安裝所有必要的 Python 套件
       - name: Install dependencies
