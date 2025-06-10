@@ -1,5 +1,5 @@
 pandas
-talib-binary
+TA-Lib
 pyarrow
 FinMind
 numpy
