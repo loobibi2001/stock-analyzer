@@ -12,6 +12,11 @@ from dataclasses import dataclass, field, asdict
 from typing import List, Dict, Any, Optional
 import json
 
+# 新增 yfinance 導入
+import yfinance as yf
+# 新增 FinMind 導入
+from FinMind.data import DataLoader
+
 # --- 設定 Matplotlib 後端為 Agg (如果需要繪圖) ---
 import matplotlib
 matplotlib.use('Agg')
@@ -21,6 +26,8 @@ logger = logging.getLogger(__name__)
 
 # --- 常量定義 ---
 MIN_REQUIRED_DAILY_DATA_BASELINE = 350
+# 建議設定一個足夠長的歷史數據天數，以便指標計算
+DEFAULT_HISTORY_DAYS = 3 * 365 # 例如 3 年數據
 
 # --- 持股與路徑管理 ---
 PORTFOLIO_FILE = "portfolio_berserker.json"
@@ -28,13 +35,17 @@ PORTFOLIO_FILE = "portfolio_berserker.json"
 @dataclass
 class Paths:
     base: str
-    data_dir_name: str = "StockData_Parquet"
+    # 不再需要 StockData_Parquet 資料夾，因為是即時下載
+    # data_dir_name: str = "StockData_Parquet" 
     list_file_name: str = "stock_list.txt"
     log_dir_name: str = "logs"
     portfolio_path: str = PORTFOLIO_FILE
 
     def __post_init__(self):
-        self.data_dir: str = os.path.join(self.base, self.data_dir_name)
+        # 設置一個臨時緩存目錄，用於模擬資料存放，Streamlit Cloud 會清除
+        self.data_dir: str = os.path.join(self.base, "temp_data_cache") 
+        if not os.path.exists(self.data_dir):
+            os.makedirs(self.data_dir, exist_ok=True) # 確保臨時緩存目錄存在
         self.list_path: str = os.path.join(self.base, self.list_file_name)
         # 修正 __file__ 檢查以避免在某些環境下找不到的問題
         script_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() and os.path.exists(__file__) else os.getcwd()
@@ -66,6 +77,60 @@ class Position:
     stock_id: str; entry_date: str; entry_price: float
     initial_stop_loss_price: float; highest_price_since_entry: float
     trailing_stop_active: bool = False; current_trailing_stop_price: float = 0.0
+
+# --- 實時數據獲取函式 ---
+_stock_data_cache: Dict[str, pd.DataFrame] = {} # 全局快取
+
+def get_stock_data(stock_id: str, start_date_str: str, end_date_str: str, finmind_api: Optional[DataLoader] = None) -> Optional[pd.DataFrame]:
+    """
+    獲取單支股票的歷史數據，優先使用 FinMind，備用 yfinance。
+    數據將被緩存，避免重複下載。
+    """
+    cache_key = f"{stock_id}_{start_date_str}_{end_date_str}"
+    if cache_key in _stock_data_cache:
+        logger.info(f"從快取載入 {stock_id} 數據。")
+        return _stock_data_cache[cache_key].copy()
+
+    df = pd.DataFrame()
+    
+    # 嘗試使用 FinMind
+    if finmind_api:
+        try:
+            logger.info(f"嘗試從 FinMind 下載 {stock_id} 數據 (從 {start_date_str} 到 {end_date_str})...")
+            df_finmind = finmind_api.get_stock_price(stock_id=stock_id, start_date=start_date_str, end_date=end_date_str)
+            if not df_finmind.empty:
+                df = df_finmind.rename(columns={
+                    'date': 'Date', 'stock_id': 'Stock', 'open': 'Open',
+                    'max': 'High', 'min': 'Low', 'close': 'Close', 'Trading_Volume': 'Volume'
+                })
+                df['Date'] = pd.to_datetime(df['Date'])
+                df = df.set_index('Date').sort_index()
+                logger.info(f"成功從 FinMind 下載 {stock_id} 數據 ({len(df)} 條)。")
+                _stock_data_cache[cache_key] = df
+                return df
+            else:
+                logger.warning(f"FinMind 未找到 {stock_id} 的數據。")
+        except Exception as e:
+            logger.error(f"FinMind 下載 {stock_id} 失敗：{e}")
+
+    # 備用：使用 yfinance
+    try:
+        yf_ticker = f"{stock_id}.TW" # 台灣股票需要 .TW 後綴
+        logger.info(f"嘗試從 yfinance 下載 {yf_ticker} 數據 (從 {start_date_str} 到 {end_date_str})...")
+        data = yf.download(yf_ticker, start=start_date_str, end=end_date_str, progress=False)
+        if not data.empty:
+            df = data
+            df.columns = [col.lower() for col in df.columns] # 統一為小寫
+            df.rename(columns={'adj close': 'adj_close'}, inplace=True)
+            logger.info(f"成功從 yfinance 下載 {yf_ticker} 數據 ({len(df)} 條)。")
+            _stock_data_cache[cache_key] = df
+            return df
+        else:
+            logger.warning(f"yfinance 未找到 {yf_ticker} 的數據。")
+    except Exception as e:
+        logger.error(f"yfinance 下載 {yf_ticker} 失敗：{e}")
+    
+    return None
 
 # --- 核心邏輯函數 ---
 def prep_data(stock_id: str, df_raw: pd.DataFrame, min_required_len: int) -> Optional[pd.DataFrame]:
@@ -200,64 +265,63 @@ def load_portfolio(path: str, manual_portfolio: Dict[str, Position]) -> Dict[str
 def save_portfolio(path: str, portfolio: Dict[str, Position]):
     with open(path, 'w', encoding='utf-8') as f:
         data_to_save = {stock_id: asdict(pos) for stock_id, pos in portfolio.items()}
-        json.dump(data_to_save, f, indent=4, ensure_ascii=False) # json.dump 支持 ensure_ascii
+        json.dump(data_to_save, f, indent=4, ensure_ascii=False) # json.dump 支持 ensure_ascii=False
 
-def create_position_from_manual_input(manual_input: Dict[str, Dict[str, Any]], paths: Paths, inds_cfg: IndParams, stop_cfg: StopCfg, filter_cfg: FilterCfg) -> Position:
+def create_position_from_manual_input(manual_input: Dict[str, Dict[str, Any]], paths: Paths, inds_cfg: IndParams, stop_cfg: StopCfg, filter_cfg: FilterCfg, finmind_api: Optional[DataLoader] = None) -> Position:
     stock_id = manual_input['stock_id']
     entry_price = manual_input['entry_price']
+    entry_date_str = manual_input['entry_date']
     
-    parquet_path = os.path.join(paths.data_dir, f"{stock_id}_history.parquet")
-    if not os.path.exists(parquet_path):
-        raise FileNotFoundError(f"無法為手動持股 {stock_id} 找到數據文件以計算停損。")
+    # 從即時數據源獲取數據
+    # 需要從入場日期前足夠的時間開始獲取數據以計算指標
+    start_date_for_manual = (pd.to_datetime(entry_date_str) - timedelta(days=MIN_REQUIRED_DAILY_DATA_BASELINE + 30)).strftime("%Y-%m-%d")
+    end_date_for_manual = (pd.to_datetime(entry_date_str) + timedelta(days=5)).strftime("%Y-%m-%d") # 獲取入場日期後幾天的數據以確保包含入場日
+    
+    df_raw = get_stock_data(stock_id, start_date_for_manual, end_date_for_manual, finmind_api)
 
-    df_raw = pd.read_parquet(parquet_path)
+    if df_raw is None or df_raw.empty:
+        raise FileNotFoundError(f"無法為手動持股 {stock_id} 獲取數據以計算停損。")
+
     df_prep = prep_data(stock_id, df_raw, MIN_REQUIRED_DAILY_DATA_BASELINE)
     if df_prep is None:
         raise ValueError(f"無法為手動持股 {stock_id} 準備數據。")
 
     df_inds = calc_inds(df_prep, inds_cfg, filter_cfg)
     
-    entry_date = pd.to_datetime(manual_input['entry_date'])
+    entry_date = pd.to_datetime(entry_date_str)
     
-    # 確保 trade_day_data 存在且索引有效
-    if entry_date not in df_inds.index:
-        # 如果入場日期不在數據中，嘗試找到最接近的日期
-        try:
-            trade_day_data = df_inds.loc[df_inds.index <= entry_date].iloc[-1]
-            logger.warning(f"手動持股 {stock_id} 的入場日期 {entry_date.strftime('%Y-%m-%d')} 不在數據中，使用最近的數據點 {trade_day_data.name.strftime('%Y-%m-%d')}。")
-        except IndexError:
-            raise ValueError(f"無法為手動持股 {stock_id} 在 {entry_date.strftime('%Y-%m-%d')} 或之前找到數據點。")
-    else:
-        trade_day_data = df_inds.loc[entry_date]
+    # 找到最接近或等於入場日期的數據
+    trade_day_data_candidates = df_inds.loc[df_inds.index <= entry_date]
+    if trade_day_data_candidates.empty:
+        raise ValueError(f"無法為手動持股 {stock_id} 在 {entry_date.strftime('%Y-%m-%d')} 或之前找到數據點。")
+    trade_day_data = trade_day_data_candidates.iloc[-1]
 
 
-    atr_at_entry = trade_day_data['atr_d']
+    atr_at_entry = trade_day_data.get('atr_d') # 使用 .get 避免 KeyError
     if pd.isna(atr_at_entry):
-        raise ValueError(f"在 {entry_date} 無法計算 {stock_id} 的ATR值，請檢查數據。")
+        raise ValueError(f"在 {entry_date.strftime('%Y-%m-%d')} 無法計算 {stock_id} 的ATR值，請檢查數據。")
 
     hard_sl = entry_price * (1.0 + stop_cfg.hard_sl_pct / 100.0)
     atr_sl = entry_price - (stop_cfg.atr_mult * atr_at_entry)
     initial_stop_loss_price = max(atr_sl, hard_sl)
 
     return Position(
-        stock_id=stock_id, entry_date=manual_input['entry_date'], entry_price=entry_price,
+        stock_id=stock_id, entry_date=entry_date_str, entry_price=entry_price,
         initial_stop_loss_price=initial_stop_loss_price,
         highest_price_since_entry=manual_input.get('highest_price_since_entry', entry_price),
         trailing_stop_active=False, current_trailing_stop_price=0.0
     )
 
-def run_daily_scan(paths: Paths, inds_cfg: IndParams, strat_cfg: StratCfg, stop_cfg: StopCfg, filter_cfg: FilterCfg, manual_portfolio: Dict[str, Position]):
+def run_daily_scan(paths: Paths, inds_cfg: IndParams, strat_cfg: StratCfg, stop_cfg: StopCfg, filter_cfg: FilterCfg, manual_portfolio: Dict[str, Position], finmind_api: Optional[DataLoader] = None):
     today_str = datetime.now().strftime('%Y-%m-%d')
     report = [f"====== 狂戰士之路-每日神諭 ({today_str}) ======"]
     
     try:
-        # 讀取 stock_list.txt 時增加更嚴格的檢查，確保只讀取有效的股票代碼
         with open(paths.list_path, "r", encoding="utf-8") as f: 
-            stock_list = [line.strip() for line in f if line.strip().isdigit() and len(line.strip()) == 4] # 假設台灣股票代碼為4位數字
+            stock_list = [line.strip() for line in f if line.strip().isdigit() and len(line.strip()) == 4]
     except FileNotFoundError: 
         logger.error(f"股票列表文件 {paths.list_path} 未找到！")
         report.append(f"錯誤：股票列表文件 {paths.list_path} 未找到！")
-        # 即使找不到檔案也要繼續，但沒有股票可掃描
         stock_list = []
         
     portfolio = load_portfolio(paths.portfolio_path, manual_portfolio)
@@ -268,37 +332,52 @@ def run_daily_scan(paths: Paths, inds_cfg: IndParams, strat_cfg: StratCfg, stop_
     report.append("\n--- (1) 檢視戰場 (出場掃描) ---")
     if not current_holdings_ids: report.append("英靈殿中尚無戰士。")
     
-    # 需要一個地方儲存所有股票的最新數據，以便在生成訊號時獲取價格
-    all_stock_data_latest_close = {} 
+    all_stock_data_latest_close = {} # 用於記錄所有掃描過股票的最新收盤價
+
+    # 設定數據下載的日期範圍：從最早的持股入場日期，或足夠長的歷史數據，到今天
+    all_dates = [pd.to_datetime(pos.entry_date) for pos in portfolio.values()]
+    if all_dates:
+        min_entry_date = min(all_dates)
+        data_start_date = (min_entry_date - timedelta(days=MIN_REQUIRED_DAILY_DATA_BASELINE + 60)).strftime("%Y-%m-%d")
+    else:
+        data_start_date = (datetime.now() - timedelta(days=DEFAULT_HISTORY_DAYS)).strftime("%Y-%m-%d")
+    data_end_date = datetime.now().strftime("%Y-%m-%d")
+
+
+    # 先一次性獲取所有當前持股和待掃描股票的數據
+    # 這可能需要一些時間
+    combined_stock_ids = list(set(current_holdings_ids + stock_list))
+    downloaded_dfs = {}
+    for stock_id in combined_stock_ids:
+        df_data = get_stock_data(stock_id, data_start_date, data_end_date, finmind_api)
+        if df_data is not None and not df_data.empty:
+            downloaded_dfs[stock_id] = df_data
+            all_stock_data_latest_close[stock_id] = df_data.iloc[-1]['close'] # 立即儲存最新價格
+        else:
+            logger.warning(f"無法獲取 {stock_id} 的數據，跳過。")
+
 
     for stock_id in current_holdings_ids:
         pos = portfolio[stock_id]
-        parquet_path = os.path.join(paths.data_dir, f"{stock_id}_history.parquet")
-        if not os.path.exists(parquet_path):
-            exits_today.append((stock_id, "數據文件遺失")); continue
+        df_raw = downloaded_dfs.get(stock_id)
+        if df_raw is None or df_raw.empty:
+            exits_today.append((stock_id, "數據文件遺失或無法獲取")); continue
             
-        df_raw = pd.read_parquet(parquet_path)
-        # 確保 min_len 不會導致負數，至少要有足夠的歷史數據
-        min_len = max(MIN_REQUIRED_DAILY_DATA_BASELINE, (datetime.now() - pd.to_datetime(pos.entry_date)).days + 60)
-        df_prep = prep_data(stock_id, df_raw, min_len)
+        min_len_for_pos = max(MIN_REQUIRED_DAILY_DATA_BASELINE, (datetime.now() - pd.to_datetime(pos.entry_date)).days + 60)
+        df_prep = prep_data(stock_id, df_raw, min_len_for_pos)
         if df_prep is None: logger.warning(f"持股 {stock_id} 數據準備失敗，跳過。"); continue
         
         df_inds = calc_inds(df_prep, inds_cfg, filter_cfg)
-        # 確保 df_inds 有足夠的數據點進行判斷
         if df_inds.empty or len(df_inds) < 2:
             logger.warning(f"持股 {stock_id} 指標計算後數據不足，跳過出場檢查。")
             continue
 
         exit_reason = check_exit_signal(df_inds, pos, inds_cfg, strat_cfg, stop_cfg)
         
-        # 儲存最新的收盤價
-        all_stock_data_latest_close[stock_id] = df_inds.iloc[-1]['close']
-
         if exit_reason:
             exits_today.append((stock_id, exit_reason))
             report.append(f"[撤退] {stock_id}: {exit_reason}")
         else:
-            # 更新持股的最高價和追蹤止損價 (確保這些更新是持久化的)
             portfolio[stock_id] = pos 
 
     if not exits_today and current_holdings_ids: report.append("所有戰士仍在奮戰，無人撤退。")
@@ -306,25 +385,20 @@ def run_daily_scan(paths: Paths, inds_cfg: IndParams, strat_cfg: StratCfg, stop_
     # 掃描進場
     entries_today = []
     report.append("\n--- (2) 尋找新的勇士 (進場掃描) ---")
-    # 只掃描那些不在當前持股中的股票
-    stocks_to_scan = [s for s in stock_list if s not in current_holdings_ids] 
+    stocks_to_scan = [s for s in stock_list if s not in current_holdings_ids and s in downloaded_dfs]
     logger.info(f"掃描 {len(stocks_to_scan)} 位潛在的勇士...")
     
     for stock_id in stocks_to_scan:
-        parquet_path = os.path.join(paths.data_dir, f"{stock_id}_history.parquet")
-        if not os.path.exists(parquet_path): continue
-        df_raw = pd.read_parquet(parquet_path)
+        df_raw = downloaded_dfs.get(stock_id)
+        if df_raw is None or df_raw.empty: continue # 已經在下載階段處理過
+        
         df_prep = prep_data(stock_id, df_raw, MIN_REQUIRED_DAILY_DATA_BASELINE)
         if df_prep is None: continue
         
         df_inds = calc_inds(df_prep, inds_cfg, filter_cfg)
-        # 確保 df_inds 有足夠的數據點進行判斷
         if df_inds.empty or len(df_inds) < 2:
             logger.warning(f"潛在勇士 {stock_id} 指標計算後數據不足，跳過進場檢查。")
             continue
-
-        # 儲存最新的收盤價，即使沒有進場訊號也保存
-        all_stock_data_latest_close[stock_id] = df_inds.iloc[-1]['close']
 
         if check_entry_signal(df_inds, inds_cfg, strat_cfg, filter_cfg):
             latest_price = df_inds.iloc[-1]['close']
@@ -338,20 +412,18 @@ def run_daily_scan(paths: Paths, inds_cfg: IndParams, strat_cfg: StratCfg, stop_
         if stock_id in portfolio: del portfolio[stock_id]
             
     for stock_id, entry_price in entries_today:
-        # 重新讀取數據，確保最新的計算用於新倉位
-        parquet_path = os.path.join(paths.data_dir, f"{stock_id}_history.parquet")
-        if not os.path.exists(parquet_path): 
-            logger.error(f"無法為新進場股票 {stock_id} 找到數據文件。")
+        # 從已下載的數據中獲取
+        df_raw = downloaded_dfs.get(stock_id)
+        if df_raw is None or df_raw.empty: 
+            logger.error(f"無法為新進場股票 {stock_id} 獲取數據。")
             continue
         
-        df_raw = pd.read_parquet(parquet_path)
         df_prep = prep_data(stock_id, df_raw, MIN_REQUIRED_DAILY_DATA_BASELINE)
         if df_prep is None:
             logger.error(f"無法為新進場股票 {stock_id} 準備數據。")
             continue
 
         df_inds = calc_inds(df_prep, inds_cfg, filter_cfg)
-        # 確保有足夠的數據計算 ATR
         if df_inds.empty or 'atr_d' not in df_inds.columns or pd.isna(df_inds.iloc[-1]['atr_d']):
             logger.error(f"無法為新進場股票 {stock_id} 計算有效的 ATR，跳過。")
             continue
@@ -371,11 +443,11 @@ def run_daily_scan(paths: Paths, inds_cfg: IndParams, strat_cfg: StratCfg, stop_
     trade_signals_output = []
     # 添加出場訊號
     for stock_id, reason in exits_today:
-        current_price = all_stock_data_latest_close.get(stock_id, 0.0) # 使用儲存的最新價格
+        current_price = all_stock_data_latest_close.get(stock_id, np.nan) # 使用儲存的最新價格，如果沒有則為 nan
         trade_signals_output.append({
             "股票代號": stock_id,
             "日期": today_str,
-            "價格": round(current_price, 2),
+            "價格": round(current_price, 2) if pd.notna(current_price) else None, # 處理 NaN 價格
             "訊號": "賣出",
             "理由": reason
         })
@@ -393,12 +465,8 @@ def run_daily_scan(paths: Paths, inds_cfg: IndParams, strat_cfg: StratCfg, stop_
     # 將 trade_signals_output 轉換為 DataFrame，然後保存為 JSON
     signals_df_for_json = pd.DataFrame(trade_signals_output)
     
-    if signals_df_for_json.empty:
-        # 如果沒有任何訊號，寫入一個空的 JSON 陣列
-        signals_df_for_json.to_json(paths.portfolio_path, orient="records", indent=4) # 移除 ensure_ascii=False
-    else:
-        signals_df_for_json.to_json(paths.portfolio_path, orient="records", indent=4) # 移除 ensure_ascii=False
-
+    # 儲存為 JSON，不帶 ensure_ascii 參數
+    signals_df_for_json.to_json(paths.portfolio_path, orient="records", indent=4) 
 
     save_portfolio(paths.portfolio_path, portfolio) # 保存更新後的持股狀態
     report.append(f"\n英靈殿名冊已更新: {paths.portfolio_path}")
@@ -446,13 +514,13 @@ def main():
     manual_portfolio_full = {}
     if MANUAL_INITIAL_STOCKS:
         logger.info("正在從手動名冊召喚初始英靈...")
-        # 需要確保 StockData_Parquet 目錄和 .parquet 檔案存在，否則 create_position_from_manual_input 會報錯
-        # 在 Streamlit Cloud 上，您可能需要一種方式來上傳或預先生成這些 .parquet 檔案
+        # 在 Method A 中，這裡會即時下載數據，不需要依賴 StockData_Parquet
         for stock_id, info in MANUAL_INITIAL_STOCKS.items():
             try:
                 full_info = {'stock_id': stock_id, **info}
+                # 傳入 finmind_api 給 create_position_from_manual_input
                 manual_portfolio_full[stock_id] = create_position_from_manual_input(
-                    full_info, paths_config, CHAOS_KING_INDS, CHAOS_KING_STOPS, CHAOS_KING_FILTERS
+                    full_info, paths_config, CHAOS_KING_INDS, CHAOS_KING_STOPS, CHAOS_KING_FILTERS, finmind_api=None # API 會在 run_daily_scan 統一處理
                 )
                 logger.info(f"成功召喚: {stock_id} @ {info['entry_price']} on {info['entry_date']}")
             except (FileNotFoundError, ValueError) as e:
@@ -461,13 +529,26 @@ def main():
     start_time = time.time()
     logger.info("--- 狂戰士之路已開啟，開始發布每日神諭 ---")
     
+    # 初始化 FinMind API
+    finmind_token = os.environ.get('FINMIND_TOKEN')
+    finmind_api = None
+    if finmind_token:
+        try:
+            finmind_api = DataLoader()
+            finmind_api.login_by_token(api_token=finmind_token)
+            logger.info("FinMind API Token 已載入並登入。")
+        except Exception as e:
+            logger.error(f"FinMind 登入失敗：{e}")
+            finmind_api = None # 確保如果登入失敗，則不使用 FinMind
+
     run_daily_scan(
         paths=paths_config,
         inds_cfg=CHAOS_KING_INDS,
         strat_cfg=CHAOS_KING_STRAT,
         stop_cfg=CHAOS_KING_STOPS,
         filter_cfg=CHAOS_KING_FILTERS,
-        manual_portfolio=manual_portfolio_full
+        manual_portfolio=manual_portfolio_full,
+        finmind_api=finmind_api # 傳入 FinMind API
     )
     
     end_time = time.time()
