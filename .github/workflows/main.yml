@@ -1,0 +1,73 @@
+# 工作流程的名稱
+name: Daily Stock Analysis
+
+# 觸發條件
+on:
+  # 1. 定時排程
+  schedule:
+    # 在 UTC 時間 09:00 (等於台灣/香港/北京時間下午 5:00)，每週一到週五執行
+    - cron: '0 9 * * 1-5'
+  # 2. 允許手動觸發
+  workflow_dispatch:
+
+# 要執行的工作
+jobs:
+  build-and-run:
+    # 使用最新的 Ubuntu 虛擬機來執行
+    runs-on: ubuntu-latest
+
+    # 工作中的步驟
+    steps:
+      # 步驟 1: 下載您的程式碼到虛擬機
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 步驟 2: 設定 Python 環境
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      # 步驟 3: 安裝所有必要的 Python 套件
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # 步驟 4: 動態修改 Python 腳本以適應雲端環境
+      - name: Modify Scripts for Actions Environment
+        run: |
+          # 將 update_stocks_daily.py 中的 API Token 改為從環境變數讀取
+          sed -i "s|finmind_api_token = \".*\"|finmind_api_token = os.environ.get('FINMIND_API_TOKEN')|" update_stocks_daily.py
+          # 確保 update_stocks_daily.py 的開頭有 import os
+          sed -i '1s/^/import os\n/' update_stocks_daily.py
+          
+          # 將所有腳本中寫死的 D:\ 路徑改為相對路徑 '.'
+          sed -i "s|base_path = r\".*\"|base_path = '.'|" convert_csv_to_parquet.py
+          sed -i "s|base_dir = r\".*\"|base_dir = '.'|" "daily_trader封神名號：混沌神王．極速終焉.py"
+
+      # 步驟 5: 執行資料更新腳本 (並注入 API Token)
+      - name: Run Data Update
+        run: python update_stocks_daily.py
+        env:
+          FINMIND_API_TOKEN: ${{ secrets.FINMIND_API_TOKEN }}
+
+      # 步驟 6: 執行 CSV 轉 Parquet 腳本
+      - name: Run CSV to Parquet Conversion
+        run: python convert_csv_to_parquet.py
+
+      # 步驟 7: 執行主分析腳本
+      - name: Run Main Analysis
+        run: python "daily_trader封神名號：混沌神王．極速終焉.py"
+
+      # 步驟 8: 將變更的檔案 (portfolio.json 等) commit 並 push 回倉庫
+      - name: Commit and push changes
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add .
+          # 檢查是否有檔案變更，如果沒有就不執行 commit，避免出錯
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "📈 Daily analysis report"
+            git push
+          fi
