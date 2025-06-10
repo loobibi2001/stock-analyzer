@@ -1,6 +1,6 @@
 import os
 import pandas as pd
-import talib
+import pandas_ta as ta # <--- 改用 pandas-ta
 from datetime import datetime, timedelta
 import numpy as np
 import time
@@ -19,10 +19,9 @@ logger = logging.getLogger(__name__)
 
 # --- 常量定義 ---
 MIN_REQUIRED_DAILY_DATA_BASELINE = 350
-# ... (其他常量與之前版本相同)
 
 # --- 持股與路徑管理 ---
-PORTFOLIO_FILE = "portfolio_berserker.json" # 為神王策略使用獨立的持股檔案
+PORTFOLIO_FILE = "portfolio_berserker.json"
 
 @dataclass
 class Paths:
@@ -65,10 +64,7 @@ class Position:
     initial_stop_loss_price: float; highest_price_since_entry: float
     trailing_stop_active: bool = False; current_trailing_stop_price: float = 0.0
 
-# --- 核心邏輯函數 (從回測腳本精簡與修改) ---
-# ... (此處省略 prep_data, calc_inds, check_entry_signal, check_exit_signal, 
-#      load_portfolio, save_portfolio, create_position_from_manual_input 
-#      等與上一版 daily_trader.py 完全相同的函數，以節省篇幅)
+# --- 核心邏輯函數 ---
 def prep_data(stock_id: str, df_raw: pd.DataFrame, min_required_len: int) -> Optional[pd.DataFrame]:
     if df_raw.empty or len(df_raw) < min_required_len: return None
     df = df_raw.copy(); df.columns = [col.lower() for col in df.columns]
@@ -85,42 +81,54 @@ def prep_data(stock_id: str, df_raw: pd.DataFrame, min_required_len: int) -> Opt
     if not all(col in df.columns for col in required) or df[required].isnull().values.any(): return None
     return df
 
+# ================= 全新的 calc_inds 函數 (使用 pandas-ta) =================
 def calc_inds(df_in: pd.DataFrame, inds_cfg: IndParams, filter_cfg: FilterCfg) -> pd.DataFrame:
-    df = df_in.copy()
-    cs,hs,ls,vs = df['close'].dropna(),df['high'].dropna(),df['low'].dropna(),df['volume'].dropna()
-    idx_hlc = cs.index.intersection(hs.index).intersection(ls.index).drop_duplicates().sort_values()
-    c_a,h_a,l_a = cs.reindex(idx_hlc),hs.reindex(idx_hlc),ls.reindex(idx_hlc)
-    
-    # 日線指標
-    if all(p > 0 for p in [inds_cfg.macd_f_d, inds_cfg.macd_s_d, inds_cfg.macd_sig_d]):
-        _,_,hist=talib.MACD(cs,fastperiod=inds_cfg.macd_f_d,slowperiod=inds_cfg.macd_s_d,signalperiod=inds_cfg.macd_sig_d)
-        df['macd_hist_d']=hist
-        df['macd_hist_d_prev']=df['macd_hist_d'].shift(1)
-    if inds_cfg.adx_p_d > 0:
-        df['adx_d']=talib.ADX(h_a,l_a,c_a,timeperiod=inds_cfg.adx_p_d)
-        df['adx_d_prev']=df['adx_d'].shift(1)
-    if inds_cfg.rsi_p_d > 0:
-        df['rsi_d']=talib.RSI(cs,timeperiod=inds_cfg.rsi_p_d)
-    if inds_cfg.atr_p_d > 0:
-        df['atr_d']=talib.ATR(h_a,l_a,c_a,timeperiod=inds_cfg.atr_p_d)
-    if filter_cfg.use_vol and inds_cfg.vol_sma_p > 0:
-        df['vol_sma']=talib.SMA(vs,timeperiod=inds_cfg.vol_sma_p)
-
-    # 週線指標
-    df_w = df.resample('W-FRI').agg({'open':'first','high':'max','low':'min','close':'last','volume':'sum'}).dropna(subset=['open','high','low','close'])
-    if not df_w.empty:
-        temp_w_inds = pd.DataFrame(index=df_w.index)
-        wc = df_w['close'].dropna()
-        if filter_cfg.use_w_macd and all(p > 0 for p in [inds_cfg.macd_f_w, inds_cfg.macd_s_w, inds_cfg.macd_sig_w]) and len(wc) >= inds_cfg.macd_s_w + inds_cfg.macd_sig_w:
-            _,_,macdw_hist=talib.MACD(wc,fastperiod=inds_cfg.macd_f_w,slowperiod=inds_cfg.macd_s_w,signalperiod=inds_cfg.macd_sig_w)
-            temp_w_inds['macd_hist_w_calc']=macdw_hist
+    if df_in.empty:
+        return df_in
         
-        if not temp_w_inds.empty:
-            df = df.merge(temp_w_inds, how='left', left_index=True, right_index=True)
-            if 'macd_hist_w_calc' in df.columns:
-                df['macd_hist_w'] = df['macd_hist_w_calc'].ffill()
-                df.drop(columns=['macd_hist_w_calc'], inplace=True)
+    df = df_in.copy()
+    
+    # --- 日線指標 ---
+    # 使用 pandas-ta 計算指標，它會自動將結果附加到 df 上
+    if all(p > 0 for p in [inds_cfg.macd_f_d, inds_cfg.macd_s_d, inds_cfg.macd_sig_d]):
+        df.ta.macd(fast=inds_cfg.macd_f_d, slow=inds_cfg.macd_s_d, signal=inds_cfg.macd_sig_d, append=True)
+        # 更名以匹配舊腳本的欄位名稱
+        df.rename(columns={f'MACDh_{inds_cfg.macd_f_d}_{inds_cfg.macd_s_d}_{inds_cfg.macd_sig_d}': 'macd_hist_d'}, inplace=True)
+        if 'macd_hist_d' in df.columns:
+             df['macd_hist_d_prev'] = df['macd_hist_d'].shift(1)
+
+    if inds_cfg.adx_p_d > 0:
+        df.ta.adx(length=inds_cfg.adx_p_d, append=True)
+        df.rename(columns={f'ADX_{inds_cfg.adx_p_d}': 'adx_d'}, inplace=True)
+        if 'adx_d' in df.columns:
+            df['adx_d_prev'] = df['adx_d'].shift(1)
+
+    if inds_cfg.rsi_p_d > 0:
+        df.ta.rsi(length=inds_cfg.rsi_p_d, append=True)
+        df.rename(columns={f'RSI_{inds_cfg.rsi_p_d}': 'rsi_d'}, inplace=True)
+
+    if inds_cfg.atr_p_d > 0:
+        df.ta.atr(length=inds_cfg.atr_p_d, append=True)
+        df.rename(columns={f'ATRr_{inds_cfg.atr_p_d}': 'atr_d'}, inplace=True)
+        
+    if filter_cfg.use_vol and inds_cfg.vol_sma_p > 0:
+        df.ta.sma(close=df['volume'], length=inds_cfg.vol_sma_p, append=True)
+        df.rename(columns={f'SMA_{inds_cfg.vol_sma_p}': 'vol_sma'}, inplace=True)
+
+    # --- 週線指標 ---
+    df_w = df.resample('W-FRI').agg({'open':'first','high':'max','low':'min','close':'last','volume':'sum'}).dropna()
+    if not df_w.empty and filter_cfg.use_w_macd and all(p > 0 for p in [inds_cfg.macd_f_w, inds_cfg.macd_s_w, inds_cfg.macd_sig_w]):
+        df_w.ta.macd(fast=inds_cfg.macd_f_w, slow=inds_cfg.macd_s_w, signal=inds_cfg.macd_sig_w, append=True)
+        df_w.rename(columns={f'MACDh_{inds_cfg.macd_f_w}_{inds_cfg.macd_s_w}_{inds_cfg.macd_sig_w}': 'macd_hist_w_calc'}, inplace=True)
+        
+        # 將計算好的週線指標合併回日線 df
+        if 'macd_hist_w_calc' in df_w.columns:
+            df = df.merge(df_w[['macd_hist_w_calc']], how='left', left_index=True, right_index=True)
+            df['macd_hist_w'] = df['macd_hist_w_calc'].ffill()
+            df.drop(columns=['macd_hist_w_calc'], inplace=True)
+            
     return df
+# ================= 函數結束 =================
 
 def check_entry_signal(df: pd.DataFrame, inds_cfg: IndParams, strat_cfg: StratCfg, filter_cfg: FilterCfg) -> bool:
     if len(df) < 2: return False
@@ -312,7 +320,7 @@ def run_daily_scan(paths: Paths, inds_cfg: IndParams, strat_cfg: StratCfg, stop_
 
 
 if __name__ == '__main__':
-    base_dir = r"D:\飆股篩選"
+    base_dir = r"D:\飆股篩選" # 這行在 Actions 中會被 sed 取代
     paths_config = Paths(base=base_dir)
     
     if not os.path.exists(paths_config.log_dir): os.makedirs(paths_config.log_dir)
