@@ -7,9 +7,14 @@ import traceback
 # --- 引入您自己的真實策略腳本 ---
 # 確保 daily_trader_main.py 和這個 app.py 檔案在同一個資料夾中
 try:
+    # 嘗試導入 daily_trader_main 模組
     import daily_trader_main
-except ImportError:
-    st.error("錯誤：找不到 'daily_trader_main.py' 檔案。請確保它和 app.py 在同一個目錄下。")
+except ImportError as e:
+    st.error(f"錯誤：無法導入 'daily_trader_main.py' 模組。請確保它和 app.py 在同一個目錄下，且其內部沒有語法錯誤導致導入失敗。詳情：{e}")
+    st.stop()
+except Exception as e:
+    st.error(f"在嘗試導入 'daily_trader_main.py' 時發生意外錯誤：{e}")
+    st.code(traceback.format_exc())
     st.stop()
 
 
@@ -26,6 +31,7 @@ def run_champion_strategy():
     try:
         # --- ↓↓↓ 這是整合的核心步驟 ↓↓↓ ---
         # 直接呼叫您腳本中的 main() 函式來執行所有分析
+        # 確保 daily_trader_main.py 中有一個 main() 函式
         daily_trader_main.main() # 執行您的腳本
         # --- 整合的核心步驟結束 ---
 
@@ -37,14 +43,29 @@ def run_champion_strategy():
             st.write(f"程式提示：已找到策略產出的檔案 '{original_filename}'。")
             
             # 讀取 JSON 檔案
-            df_from_json = pd.read_json(original_filename)
+            # 這裡需要考慮 JSON 檔案可能是空的或者格式不對的問題
+            try:
+                df_from_json = pd.read_json(original_filename)
+                if df_from_json.empty:
+                    st.warning(f"警告：'{original_filename}' 檔案是空的，沒有產生任何交易訊號。")
+                    # 可以選擇不生成 trade_signals.csv 或者生成一個空的
+                    pd.DataFrame().to_csv(target_filename, index=False) 
+                    return True # 雖然沒有訊號，但流程是成功的
+            except pd.errors.EmptyDataError:
+                st.warning(f"警告：'{original_filename}' 檔案為空或無效 JSON，將生成空的交易訊號。")
+                pd.DataFrame().to_csv(target_filename, index=False)
+                return True
+            except Exception as e:
+                st.error(f"讀取 '{original_filename}' 時發生錯誤：{e}。請檢查 JSON 檔案格式。")
+                st.code(traceback.format_exc())
+                return False
             
             # 將 DataFrame 儲存為 CSV 檔案，供網頁前端使用
             df_from_json.to_csv(target_filename, index=False)
             
             st.write(f"程式提示：已成功將 '{original_filename}' 轉換並儲存為 '{target_filename}'。")
         else:
-            st.error(f"錯誤：策略腳本執行完畢，但找不到預期的結果檔案 '{original_filename}'。請檢查您的策略腳本。")
+            st.error(f"錯誤：策略腳本執行完畢，但找不到預期的結果檔案 '{original_filename}'。請檢查您的策略腳本是否成功生成了此檔案。")
             return False
 
         print("真實邏輯：策略分析完成，交易訊號已更新。")
@@ -66,8 +87,21 @@ def load_trade_signals():
 
 def load_portfolio():
     """載入使用者儲存的持股檔案"""
+    # 檢查檔案是否存在，如果不存在則創建一個帶有預設值的 DataFrame
     if os.path.exists("my_portfolio.csv"):
-        return pd.read_csv("my_portfolio.csv")
+        try:
+            df = pd.read_csv("my_portfolio.csv")
+            # 確保有預期的欄位，如果沒有則加上
+            if '股票代號' not in df.columns:
+                df['股票代號'] = ''
+            if '持有股數' not in df.columns:
+                df['持有股數'] = 0
+            if '平均成本' not in df.columns:
+                df['平均成本'] = 0.0
+            return df
+        except pd.errors.EmptyDataError:
+            st.warning("my_portfolio.csv 檔案為空，將載入預設持股範例。")
+            pass # 繼續執行到返回預設 DataFrame
     return pd.DataFrame([
         {"股票代號": "2330.TW", "持有股數": 1000, "平均成本": 600.5},
         {"股票代號": "00878.TW", "持有股數": 5000, "平均成本": 22.1},
@@ -75,7 +109,15 @@ def load_portfolio():
 
 def save_portfolio(df):
     """儲存持股 DataFrame 到 CSV 檔案"""
-    df.to_csv("my_portfolio.csv", index=False)
+    # 確保 DataFrame 不為空，避免寫入空檔案
+    if not df.empty:
+        df.to_csv("my_portfolio.csv", index=False)
+    else:
+        # 如果用戶清空了所有持股，也應將檔案寫入為空，或者刪除檔案
+        if os.path.exists("my_portfolio.csv"):
+            os.remove("my_portfolio.csv")
+        st.info("持股清單已清空。")
+
 
 # ==============================================================================
 # --- 前端網頁介面 (UI) ---
@@ -91,6 +133,7 @@ def main():
         st.header("控制面板")
         
         # 根據您的個人化資訊，顯示冠軍策略名稱
+        # 從Saved Information中讀取，這裡使用最新一條
         st.caption("當前冠軍策略: Alloc40_B1_T21_NoFiltVol")
 
         if st.button("更新今日資料與分析", type="primary", use_container_width=True):
@@ -100,6 +143,8 @@ def main():
             if success:
                 st.success("分析已全部完成！")
                 st.toast("訊號已刷新！", icon="🎉")
+                # 重新載入訊號以更新顯示
+                st.session_state['signals_updated'] = True # 使用 session_state 觸發重繪
             else:
                 st.error("分析過程中發生錯誤，請查看上方訊息。")
 
@@ -121,8 +166,14 @@ def main():
     # --- 主畫面 (Main Content) ---
     st.title("📈 股市策略分析儀")
     
+    # 只有在 signals_updated 標誌為 True 時才重新載入並顯示訊號
+    # 這樣可以確保在點擊按鈕後，訊號區能夠即時更新
+    if 'signals_updated' not in st.session_state:
+        st.session_state['signals_updated'] = False
+    
+    # 如果是第一次載入或訊號已更新，則載入訊號
     signals_df = load_trade_signals()
-
+    
     if signals_df.empty:
         st.info("目前沒有交易訊號，請點擊左側按鈕進行分析。")
     else:
@@ -152,24 +203,29 @@ def main():
         if my_portfolio.empty:
             st.warning("您尚未建立持股清單，請至左側側邊欄新增。")
         else:
-            # 為了應對不同的股票代號欄位名稱
-            stock_id_column = None
-            if 'Stock' in signals_df.columns:
-                stock_id_column = 'Stock'
-            elif '股票代號' in signals_df.columns:
-                stock_id_column = '股票代號'
-            
-            if stock_id_column and '股票代號' in my_portfolio.columns:
-                signals_df_renamed = signals_df.rename(columns={stock_id_column: '股票代號'})
-                alerts_df = pd.merge(my_portfolio, signals_df_renamed, on='股票代號', how="inner")
+            # 確保 signals_df 不為空，才進行合併操作
+            if not signals_df.empty:
+                # 為了應對不同的股票代號欄位名稱
+                stock_id_column = None
+                if 'Stock' in signals_df.columns:
+                    stock_id_column = 'Stock'
+                elif '股票代號' in signals_df.columns:
+                    stock_id_column = '股票代號'
                 
-                if alerts_df.empty:
-                    st.success("太好了！您的持股目前沒有出現任何新的買賣訊號。")
+                if stock_id_column and '股票代號' in my_portfolio.columns:
+                    signals_df_renamed = signals_df.rename(columns={stock_id_column: '股票代號'})
+                    # 使用 inner join 只保留同時在持股和訊號中存在的股票
+                    alerts_df = pd.merge(my_portfolio, signals_df_renamed, on='股票代號', how="inner")
+                    
+                    if alerts_df.empty:
+                        st.success("太好了！您的持股目前沒有出現任何新的買賣訊號。")
+                    else:
+                        st.warning("注意！您的以下持股出現新的交易訊號：")
+                        st.dataframe(alerts_df, use_container_width=True)
                 else:
-                    st.warning("注意！您的以下持股出現新的交易訊號：")
-                    st.dataframe(alerts_df, use_container_width=True)
+                    st.error("無法進行持股比對，因為訊號檔或持股檔中缺少可對應的股票代號欄位。")
             else:
-                st.error("無法進行持股比對，因為訊號檔或持股檔中缺少可對應的股票代號欄位。")
+                st.info("沒有交易訊號產生，無法比對持股警示。")
 
 if __name__ == "__main__":
     main()
