@@ -12,8 +12,8 @@ from dataclasses import dataclass, field, asdict
 from typing import List, Dict, Any, Optional
 import json
 
-# 新增 yfinance 導入
-import yfinance as yf
+# 移除了 yfinance 導入
+# import yfinance as yf 
 # 新增 FinMind 導入
 from FinMind.data import DataLoader
 
@@ -35,8 +35,6 @@ PORTFOLIO_FILE = "portfolio_berserker.json"
 @dataclass
 class Paths:
     base: str
-    # 不再需要 StockData_Parquet 資料夾，因為是即時下載
-    # data_dir_name: str = "StockData_Parquet" 
     list_file_name: str = "stock_list.txt"
     log_dir_name: str = "logs"
     portfolio_path: str = PORTFOLIO_FILE
@@ -78,12 +76,12 @@ class Position:
     initial_stop_loss_price: float; highest_price_since_entry: float
     trailing_stop_active: bool = False; current_trailing_stop_price: float = 0.0
 
-# --- 實時數據獲取函式 ---
+# --- 實時數據獲取函式 (僅使用 FinMind) ---
 _stock_data_cache: Dict[str, pd.DataFrame] = {} # 全局快取
 
 def get_stock_data(stock_id: str, start_date_str: str, end_date_str: str, finmind_api: Optional[DataLoader] = None) -> Optional[pd.DataFrame]:
     """
-    獲取單支股票的歷史數據，優先使用 FinMind，備用 yfinance。
+    獲取單支股票的歷史數據，僅使用 FinMind。
     數據將被緩存，避免重複下載。
     """
     cache_key = f"{stock_id}_{start_date_str}_{end_date_str}"
@@ -93,7 +91,7 @@ def get_stock_data(stock_id: str, start_date_str: str, end_date_str: str, finmin
 
     df = pd.DataFrame()
     
-    # 嘗試使用 FinMind
+    # 僅嘗試使用 FinMind
     if finmind_api:
         try:
             logger.info(f"嘗試從 FinMind 下載 {stock_id} 數據 (從 {start_date_str} 到 {end_date_str})...")
@@ -112,25 +110,10 @@ def get_stock_data(stock_id: str, start_date_str: str, end_date_str: str, finmin
                 logger.warning(f"FinMind 未找到 {stock_id} 的數據。")
         except Exception as e:
             logger.error(f"FinMind 下載 {stock_id} 失敗：{e}")
-
-    # 備用：使用 yfinance
-    try:
-        yf_ticker = f"{stock_id}.TW" # 台灣股票需要 .TW 後綴
-        logger.info(f"嘗試從 yfinance 下載 {yf_ticker} 數據 (從 {start_date_str} 到 {end_date_str})...")
-        data = yf.download(yf_ticker, start=start_date_str, end=end_date_str, progress=False)
-        if not data.empty:
-            df = data
-            df.columns = [col.lower() for col in df.columns] # 統一為小寫
-            df.rename(columns={'adj close': 'adj_close'}, inplace=True)
-            logger.info(f"成功從 yfinance 下載 {yf_ticker} 數據 ({len(df)} 條)。")
-            _stock_data_cache[cache_key] = df
-            return df
-        else:
-            logger.warning(f"yfinance 未找到 {yf_ticker} 的數據。")
-    except Exception as e:
-        logger.error(f"yfinance 下載 {yf_ticker} 失敗：{e}")
+    else:
+        logger.warning("FinMind API 未初始化或 FINMIND_TOKEN 未設定，無法下載數據。")
     
-    return None
+    return None # 如果 FinMind 失敗或未初始化，則返回 None
 
 # --- 核心邏輯函數 ---
 def prep_data(stock_id: str, df_raw: pd.DataFrame, min_required_len: int) -> Optional[pd.DataFrame]:
@@ -157,10 +140,8 @@ def calc_inds(df_in: pd.DataFrame, inds_cfg: IndParams, filter_cfg: FilterCfg) -
     df = df_in.copy()
     
     # --- 日線指標 ---
-    # 使用 pandas-ta 計算指標，它會自動將結果附加到 df 上
     if all(p > 0 for p in [inds_cfg.macd_f_d, inds_cfg.macd_s_d, inds_cfg.macd_sig_d]):
         df.ta.macd(fast=inds_cfg.macd_f_d, slow=inds_cfg.macd_s_d, signal=inds_cfg.macd_sig_d, append=True)
-        # 更名以匹配舊腳本的欄位名稱
         df.rename(columns={f'MACDh_{inds_cfg.macd_f_d}_{inds_cfg.macd_s_d}_{inds_cfg.macd_sig_d}': 'macd_hist_d'}, inplace=True)
         if 'macd_hist_d' in df.columns:
              df['macd_hist_d_prev'] = df['macd_hist_d'].shift(1)
@@ -272,7 +253,7 @@ def create_position_from_manual_input(manual_input: Dict[str, Dict[str, Any]], p
     entry_price = manual_input['entry_price']
     entry_date_str = manual_input['entry_date']
     
-    # 從即時數據源獲取數據
+    # 從即時數據源獲取數據 (現在只使用 FinMind)
     # 需要從入場日期前足夠的時間開始獲取數據以計算指標
     start_date_for_manual = (pd.to_datetime(entry_date_str) - timedelta(days=MIN_REQUIRED_DAILY_DATA_BASELINE + 30)).strftime("%Y-%m-%d")
     end_date_for_manual = (pd.to_datetime(entry_date_str) + timedelta(days=5)).strftime("%Y-%m-%d") # 獲取入場日期後幾天的數據以確保包含入場日
@@ -514,13 +495,12 @@ def main():
     manual_portfolio_full = {}
     if MANUAL_INITIAL_STOCKS:
         logger.info("正在從手動名冊召喚初始英靈...")
-        # 在 Method A 中，這裡會即時下載數據，不需要依賴 StockData_Parquet
+        # 這裡的 create_position_from_manual_input 仍然需要 finmind_api
         for stock_id, info in MANUAL_INITIAL_STOCKS.items():
             try:
                 full_info = {'stock_id': stock_id, **info}
-                # 傳入 finmind_api 給 create_position_from_manual_input
                 manual_portfolio_full[stock_id] = create_position_from_manual_input(
-                    full_info, paths_config, CHAOS_KING_INDS, CHAOS_KING_STOPS, CHAOS_KING_FILTERS, finmind_api=None # API 會在 run_daily_scan 統一處理
+                    full_info, paths_config, CHAOS_KING_INDS, CHAOS_KING_STOPS, CHAOS_KING_FILTERS, finmind_api=None # API 會在 main 函數中初始化
                 )
                 logger.info(f"成功召喚: {stock_id} @ {info['entry_price']} on {info['entry_date']}")
             except (FileNotFoundError, ValueError) as e:
@@ -529,7 +509,7 @@ def main():
     start_time = time.time()
     logger.info("--- 狂戰士之路已開啟，開始發布每日神諭 ---")
     
-    # 初始化 FinMind API
+    # 初始化 FinMind API (放在這裡，確保 run_daily_scan 可以使用)
     finmind_token = os.environ.get('FINMIND_TOKEN')
     finmind_api = None
     if finmind_token:
