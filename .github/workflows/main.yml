@@ -1,3 +1,5 @@
+# .github/workflows/main.yml
+
 name: Daily Stock Analysis Core
 
 on:
@@ -6,7 +8,7 @@ on:
     branches:
       - main
   schedule:
-    - cron: '0 9 * * 1-5' # 台灣時間下午 5 點
+    - cron: '0 9 * * 1-5' # 台灣時間下午 5 點 (UTC 9:00 AM)
 
 permissions:
   contents: write
@@ -18,37 +20,39 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      # --- 我們在這裡加入偵錯步驟 ---
-      - name: List files in the repository
-        run: ls -R
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+          cache: 'pip' # 啟用 pip 快取
 
       - name: Install Python dependencies
-        run: |
-          pip install numpy pandas yfinance
+        run: pip install -r requirements.txt
 
       - name: Download Stock Data
         env:
           FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
-        run: python main.py
+        # 假設您的檔案在 'src' 資料夾下，如果不是，請修改此路徑
+        run: python src/main.py
 
       - name: Convert Data Format
-        run: python data_converter.py
+        # 假設您的檔案在 'src' 資料夾下，如果不是，請修改此路徑
+        run: python src/data_converter.py
 
       - name: Run Berserker Strategy
-        run: python strategy_berserker.py
+        # 假設您的檔案在 'src' 資料夾下，如果不是，請修改此路徑
+        run: python src/strategy_berserker.py
 
       - name: Commit and push if there are changes
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           git add logs/ portfolio_berserker.json
-          git commit -m "📈 Daily analysis core update" || true
-          git push || true
+          # 檢查是否有任何已暫存的變更，若有才執行 commit & push
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "📈 Daily analysis core update"
+            git push
+          fi
