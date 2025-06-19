@@ -20,7 +20,7 @@ jobs:
       uses: actions/checkout@v3
 
     # 步驟 1.5: 安裝必要的系統編譯套件
-    # 這是解決 ta-lib 編譯問題的關鍵，確保有 build-essential (包含 gcc 和 g++) 和 Python 開發套件
+    # 確保有 build-essential (包含 gcc 和 g++) 和 Python 開發套件
     - name: Install system dependencies
       run: |
         sudo apt-get update
@@ -41,32 +41,23 @@ jobs:
         # 設定安裝前綴到用戶目錄下的 local
         ./configure --prefix=${HOME}/local
         make
-        # 使用 DESTDIR 來臨時安裝，並確保所有必要的文件都被複製到正確的位置
-        # DESTDIR 會將整個安裝結構放置在其下方，所以原始的 /usr/lib 會變成 /tmp/ta-lib-install-temp/usr/lib
+        # 使用 DESTDIR 將安裝暫存到臨時目錄
         make install DESTDIR=/tmp/ta-lib-install-temp
+        
+        # 診斷：列出臨時安裝目錄的內容，以確認檔案實際位置
+        echo "Contents of /tmp/ta-lib-install-temp:"
+        ls -R /tmp/ta-lib-install-temp
         
         # 確保目標目錄存在
         mkdir -p ${HOME}/local/lib
         mkdir -p ${HOME}/local/include/ta-lib
         
-        # 複製所有 TA-Lib 的庫文件到我們預期的目標位置
-        # 注意：根據 TA-Lib 的 make install 行為，/usr/lib 和 /usr/include 可能會直接在 DESTDIR 下
-        # 為了更安全，我們檢查實際的安裝路徑
-        if [ -d "/tmp/ta-lib-install-temp/usr/lib" ]; then
-          cp -r /tmp/ta-lib-install-temp/usr/lib/* ${HOME}/local/lib/
-        else
-          # 如果沒有 /usr/lib，則檢查是否直接在 DESTDIR/lib
-          cp -r /tmp/ta-lib-install-temp/lib/* ${HOME}/local/lib/
-        fi
+        # 複製所有 TA-Lib 的庫文件和頭文件到我們預期的最終目標位置
+        # 注意：這裡的複製路徑是基於 DESTDIR 和 configure --prefix 的組合
+        cp -r /tmp/ta-lib-install-temp${HOME}/local/lib/* ${HOME}/local/lib/
+        cp -r /tmp/ta-lib-install-temp${HOME}/local/include/ta-lib/* ${HOME}/local/include/ta-lib/
         
-        if [ -d "/tmp/ta-lib-install-temp/usr/include/ta-lib" ]; then
-          cp -r /tmp/ta-lib-install-temp/usr/include/ta-lib/* ${HOME}/local/include/ta-lib/
-        else
-          # 如果沒有 /usr/include/ta-lib，則檢查是否直接在 DESTDIR/include/ta-lib
-          cp -r /tmp/ta-lib-install-temp/include/ta-lib/* ${HOME}/local/include/ta-lib/
-        fi
-        
-        # 診斷：檢查 TA-Lib 庫和頭文件是否存在於新路徑
+        # 診斷：檢查 TA-Lib 庫和頭文件是否存在於最終安裝路徑
         echo "Verifying TA-Lib C library installation at final location:"
         ls -l ${HOME}/local/lib/libta-lib.so* # 檢查動態庫
         ls -l ${HOME}/local/include/ta-lib/ta_libc.h # 檢查頭文件
