@@ -3,40 +3,22 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>V25 量化交易儀表板 (JSON 內嵌版)</title>
+    <title>V25 量化交易儀表板 (手動更新版)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
-        body {
-            font-family: 'Inter', 'Noto Sans TC', sans-serif;
-            background-color: #f0f2f5;
-        }
-        .card {
-            background-color: white;
-            border-radius: 0.75rem;
-            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
-            transition: all 0.3s ease-in-out;
-        }
-        .card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
-        }
-        .status-breakeven {
-            background-color: #e0f2fe;
-            color: #0c4a6e;
-        }
-        .status-initial {
-            background-color: #fef9c3;
-            color: #854d0e;
-        }
-        .positive {
-            color: #16a34a; /* green-600 */
-        }
-        .negative {
-            color: #dc2626; /* red-600 */
-        }
+        body { font-family: 'Inter', 'Noto Sans TC', sans-serif; background-color: #f0f2f5; }
+        .card { background-color: white; border-radius: 0.75rem; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1); transition: all 0.3s ease-in-out; }
+        .card:hover { transform: translateY(-2px); box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1); }
+        .status-breakeven { background-color: #e0f2fe; color: #0c4a6e; }
+        .status-initial { background-color: #fef9c3; color: #854d0e; }
+        .positive { color: #16a34a; }
+        .negative { color: #dc2626; }
+        .btn-update { background-color: #1d4ed8; color: white; transition: background-color 0.3s; }
+        .btn-update:hover { background-color: #1e40af; }
+        .btn-update:disabled { background-color: #9ca3af; cursor: not-allowed; }
     </style>
 </head>
 <body class="p-4 sm:p-6 md:p-8">
@@ -47,31 +29,31 @@
             <p id="error-text"></p>
         </div>
 
-        <!-- Header -->
         <header class="mb-8">
             <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center">
                 <div>
                     <h1 class="text-3xl font-bold text-gray-800">V25 量化交易儀表板</h1>
                     <p class="mt-1 text-gray-500">基於高勝率動能突破策略的每日交易模擬</p>
                 </div>
-                <div class="mt-4 sm:mt-0 text-right">
-                    <p class="text-sm text-gray-500">上次更新</p>
-                    <p id="last-updated" class="text-lg font-semibold text-gray-700"></p>
+                <div class="mt-4 sm:mt-0 text-right flex items-center space-x-4">
+                     <div>
+                        <p class="text-sm text-gray-500">上次更新</p>
+                        <p id="last-updated" class="text-lg font-semibold text-gray-700"></p>
+                    </div>
+                    <!-- FIX: 新增手動更新按鈕 -->
+                    <button id="update-button" onclick="triggerDeploy()" class="btn-update font-bold py-2 px-4 rounded-lg shadow-md">
+                        手動更新
+                    </button>
                 </div>
             </div>
         </header>
 
-        <!-- Portfolio Overview -->
-        <section id="overview-section" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-        </section>
-
-        <!-- Main Content -->
+        <!-- 以下 HTML 結構與前版相同 -->
+        <section id="overview-section" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8"></section>
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
             <div class="lg:col-span-2">
                 <div class="card p-6">
-                    <div class="flex justify-between items-center mb-4">
-                         <h2 class="text-xl font-bold text-gray-800">📈 當前持股狀態</h2>
-                    </div>
+                    <h2 class="text-xl font-bold text-gray-800 mb-4">📈 當前持股狀態</h2>
                     <div class="overflow-x-auto">
                         <table class="w-full text-sm text-left text-gray-600">
                             <thead class="text-xs text-gray-700 uppercase bg-gray-50">
@@ -83,8 +65,7 @@
                                     <th scope="col" class="px-4 py-3 text-right">累積損益</th>
                                 </tr>
                             </thead>
-                            <tbody id="holdings-table-body">
-                            </tbody>
+                            <tbody id="holdings-table-body"></tbody>
                         </table>
                     </div>
                 </div>
@@ -111,66 +92,66 @@
     </div>
 
     <script>
-        // --- FIX: 交易計畫現在直接嵌入到 HTML 中，不再需要 fetch ---
-        //
-        // --- 新的操作流程 ---
-        // 1. 每日盤後執行 V25_daily_scanner.py 腳本。此腳本現在會抓取最新股價並計算好所有損益。
-        // 2. 腳本會產生最新的 "trading_plan.json" 檔案。
-        // 3. 打開 "trading_plan.json" 檔案，複製裡面的所有內容。
-        // 4. 將複製的內容，完整貼到下方的 "tradingPlanData" 變數的大括號 {} 之間。
-        // 5. 儲存此 HTML 檔案並上傳到 Netlify。儀表板將直接顯示所有預先計算好的結果。
-        //
+        // --- 設定 ---
+        // !!! 請在此處貼上您從 Netlify 取得的 Build Hook URL !!!
+        const NETLIFY_BUILD_HOOK_URL = "YOUR_NETLIFY_BUILD_HOOK_URL_HERE";
+
         const tradingPlanData = {
-            "overview": {
-                "totalEquity": 3000000.0,
-                "cash": 1398000.0,
-                "holdingsValue": 2025000.0,
-                "netPL": 423000.0
-            },
-            "holdings": [
-                {
-                    "ticker": "2603",
-                    "name": "長榮",
-                    "shares": 10000,
-                    "entryPrice": 160.2,
-                    "stop_loss_price": 160.2,
-                    "breakeven_stop_set": true,
-                    "status": "風控升級",
-                    "currentPrice": 202.5,
-                    "pnl": 423000.0
-                }
-            ],
+            "overview": { "totalEquity": 3000000.0, "cash": 1398000.0, "holdingsValue": 2025000.0, "netPL": 423000.0 },
+            "holdings": [{ "ticker": "2603", "name": "長榮", "shares": 10000, "entryPrice": 160.2, "stop_loss_price": 160.2, "breakeven_stop_set": true, "status": "風控升級", "currentPrice": 202.5, "pnl": 423000.0 }],
             "buySignals": [],
-            "sellSignals": [
-                 {
-                    "ticker": "2603",
-                    "name": "長榮",
-                    "reason": "觸及追蹤停利 (50MA)"
-                }
-            ]
+            "sellSignals": [{ "ticker": "2603", "name": "長榮", "reason": "觸及追蹤停利 (50MA)" }]
         };
 
         const formatCurrency = (value, decimals = 0) => {
             if (typeof value !== 'number') return '$ -';
-            return new Intl.NumberFormat('en-US', {
-                style: 'currency', currency: 'TWD',
-                minimumFractionDigits: decimals, maximumFractionDigits: decimals,
-            }).format(value).replace("NT$", "$");
+            return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'TWD', minimumFractionDigits: decimals, maximumFractionDigits: decimals }).format(value).replace("NT$", "$");
         };
         
         function displayError(message) {
-            const errorContainer = document.getElementById('api-error-message');
             document.getElementById('error-text').textContent = message;
-            errorContainer.classList.remove('hidden');
+            document.getElementById('api-error-message').classList.remove('hidden');
         }
 
+        // --- FIX: 新增手動觸發函式 ---
+        async function triggerDeploy() {
+            const button = document.getElementById('update-button');
+            if (NETLIFY_BUILD_HOOK_URL === "https://api.netlify.com/build_hooks/6853ba56bf93d9a616d903df") {
+                alert("錯誤：請先在 HTML 檔案中設定您的 Netlify Build Hook URL！");
+                return;
+            }
+
+            button.disabled = true;
+            button.textContent = "觸發中...";
+
+            try {
+                // 向 build hook 發送 POST 請求
+                const response = await fetch(NETLIFY_BUILD_HOOK_URL, { method: 'POST' });
+                if (response.ok) {
+                    button.textContent = "更新已觸發！";
+                    alert("更新已觸發！\n\n系統正在背景重新部署，請於 2-3 分鐘後手動刷新頁面查看最新結果。");
+                } else {
+                    throw new Error(`觸發失敗 (HTTP ${response.status})`);
+                }
+            } catch (error) {
+                console.error("觸發部署失敗:", error);
+                alert(`觸發部署失敗: ${error.message}`);
+                button.textContent = "手動更新";
+                button.disabled = false;
+            }
+        }
+        
+        // --- 渲染函式 (與前版相同) ---
         function renderOverview(overviewData) {
              const container = document.getElementById('overview-section');
+             if (!overviewData) return;
+             const { cash = 0, holdingsValue = 0, netPL = 0 } = overviewData;
+             const totalEquity = cash + holdingsValue;
              const overviewMetrics = [
-                { label: '總體權益', value: formatCurrency(overviewData.cash + overviewData.holdingsValue), color: 'text-blue-600' },
-                { label: '持倉損益', value: formatCurrency(overviewData.netPL), color: overviewData.netPL >= 0 ? 'positive' : 'negative' },
-                { label: '持股市值', value: formatCurrency(overviewData.holdingsValue), color: 'text-indigo-600' },
-                { label: '現金部位', value: formatCurrency(overviewData.cash), color: 'text-gray-600' }
+                { label: '總體權益', value: formatCurrency(totalEquity), color: 'text-blue-600' },
+                { label: '持倉損益', value: formatCurrency(netPL), color: netPL >= 0 ? 'positive' : 'negative' },
+                { label: '持股市值', value: formatCurrency(holdingsValue), color: 'text-indigo-600' },
+                { label: '現金部位', value: formatCurrency(cash), color: 'text-gray-600' }
              ];
              container.innerHTML = overviewMetrics.map(metric => `<div class="card p-4"><p class="text-sm text-gray-500">${metric.label}</p><p class="text-2xl font-bold ${metric.color}">${metric.value}</p></div>`).join('');
         }
@@ -178,25 +159,12 @@
         function renderHoldings(holdings) {
              const container = document.getElementById('holdings-table-body');
              if (!holdings || holdings.length === 0) {
-                 container.innerHTML = `<tr><td colspan="5" class="text-center py-8 text-gray-500">目前無任何持股</td></tr>`;
-                 return;
+                 container.innerHTML = `<tr><td colspan="5" class="text-center py-8 text-gray-500">目前無任何持股</td></tr>`; return;
              }
              container.innerHTML = holdings.map(h => {
                  const pnlClass = h.pnl >= 0 ? 'positive' : 'negative';
                  const statusClass = h.status === '風控升級' ? 'status-breakeven' : 'status-initial';
-                 return `
-                    <tr class="border-b hover:bg-gray-50">
-                        <td class="px-4 py-4 font-medium text-gray-900">
-                            <div>${h.ticker} ${h.name || ''}</div>
-                            <div class="text-xs text-gray-500">${(h.shares || 0).toLocaleString()} 股 @ ${formatCurrency(h.entryPrice, 1)}</div>
-                        </td>
-                        <td class="px-4 py-4 text-right font-semibold">${h.currentPrice ? formatCurrency(h.currentPrice, 1) : 'N/A'}</td>
-                        <td class="px-4 py-4 text-right font-semibold text-red-600">${formatCurrency(h.stop_loss_price, 1)}</td>
-                        <td class="px-4 py-4">
-                            <span class="px-2 py-1 text-xs font-medium rounded-full ${statusClass}">${h.status}</span>
-                        </td>
-                        <td class="px-4 py-4 text-right font-bold ${pnlClass}">${typeof h.pnl === 'number' ? formatCurrency(h.pnl) : 'N/A'}</td>
-                    </tr>`;
+                 return `<tr class="border-b hover:bg-gray-50"><td class="px-4 py-4 font-medium text-gray-900"><div>${h.ticker} ${h.name||''}</div><div class="text-xs text-gray-500">${(h.shares||0).toLocaleString()} 股 @ ${formatCurrency(h.entryPrice,1)}</div></td><td class="px-4 py-4 text-right font-semibold">${h.currentPrice?formatCurrency(h.currentPrice,1):'N/A'}</td><td class="px-4 py-4 text-right font-semibold text-red-600">${formatCurrency(h.stop_loss_price,1)}</td><td class="px-4 py-4"><span class="px-2 py-1 text-xs font-medium rounded-full ${statusClass}">${h.status}</span></td><td class="px-4 py-4 text-right font-bold ${pnlClass}">${typeof h.pnl==='number'?formatCurrency(h.pnl):'N/A'}</td></tr>`;
              }).join('');
         }
         
@@ -205,13 +173,7 @@
              if (!signals || signals.length === 0) {
                 container.innerHTML = `<div class="text-center py-4 text-gray-500 text-sm">今日無進場訊號</div>`; return;
              }
-             container.innerHTML = signals.map(s => `
-                <div class="p-3 bg-green-50 border border-green-200 rounded-lg">
-                    <p class="font-bold text-green-800">${s.ticker} ${s.name || ''}</p>
-                    <p class="text-xs text-green-700 mt-1">建議購買: <span class="font-semibold">${(s.sharesToBuy || 0).toLocaleString()} 股</span></p>
-                    <p class="text-xs text-green-700">預估投入: <span class="font-semibold">${formatCurrency(s.estimatedCost)}</span></p>
-                    <p class="text-xs text-red-700 mt-1">初始停損價: <span class="font-semibold">${formatCurrency(s.stopLoss, 1)}</span></p>
-                </div>`).join('');
+             container.innerHTML = signals.map(s => `<div class="p-3 bg-green-50 border border-green-200 rounded-lg"><p class="font-bold text-green-800">${s.ticker} ${s.name||''}</p><p class="text-xs text-green-700 mt-1">建議購買: <span class="font-semibold">${(s.sharesToBuy||0).toLocaleString()} 股</span></p><p class="text-xs text-green-700">預估投入: <span class="font-semibold">${formatCurrency(s.estimatedCost)}</span></p><p class="text-xs text-red-700 mt-1">初始停損價: <span class="font-semibold">${formatCurrency(s.stopLoss,1)}</span></p></div>`).join('');
         }
         
         function renderSellSignals(signals) {
@@ -219,23 +181,16 @@
              if (!signals || signals.length === 0) {
                 container.innerHTML = `<div class="text-center py-4 text-gray-500 text-sm">今日無出場訊號</div>`; return;
              }
-             container.innerHTML = signals.map(s => `
-                <div class="p-3 bg-red-50 border border-red-200 rounded-lg">
-                    <p class="font-bold text-red-800">${s.ticker} ${s.name || ''}</p>
-                    <p class="text-xs text-red-700 mt-1">執行動作: <span class="font-semibold">明天開盤全數賣出</span></p>
-                    <p class="text-xs text-gray-600 mt-1">原因: ${s.reason}</p>
-                </div>`).join('');
+             container.innerHTML = signals.map(s => `<div class="p-3 bg-red-50 border border-red-200 rounded-lg"><p class="font-bold text-red-800">${s.ticker} ${s.name||''}</p><p class="text-xs text-red-700 mt-1">執行動作: <span class="font-semibold">明天開盤全數賣出</span></p><p class="text-xs text-gray-600 mt-1">原因: ${s.reason}</p></div>`).join('');
         }
 
         function main() {
             document.getElementById('last-updated').textContent = new Date().toLocaleString('zh-Hant');
-            
             const tradingPlan = tradingPlanData;
             if (!tradingPlan || !tradingPlan.overview) {
                 displayError("找不到交易計畫數據或格式不正確。請確認 tradingPlanData 變數中已貼上由 Python 腳本產生的完整 JSON 內容。");
                 return;
             }
-
             renderOverview(tradingPlan.overview);
             renderHoldings(tradingPlan.holdings);
             renderBuySignals(tradingPlan.buySignals);
@@ -245,4 +200,4 @@
         document.addEventListener('DOMContentLoaded', main);
     </script>
 </body>
-</html>
+</ht
