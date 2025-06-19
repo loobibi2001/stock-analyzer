@@ -28,7 +28,7 @@ jobs:
     # 步驟 3.1: 手動下載、編譯並安裝 TA-Lib 底層函式庫
     - name: Install TA-Lib from source
       run: |
-        wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz -q
+        wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz
         tar -xzf ta-lib-0.4.0-src.tar.gz
         cd ta-lib/
         ./configure --prefix=/usr
@@ -39,23 +39,23 @@ jobs:
     - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
-        # --- FIX: 雙重保險，同時更新 ldconfig 並設定環境變數 ---
-        sudo ldconfig
-        export TA_LIBRARY_PATH=/usr/lib
-        pip install pandas requests TA-Lib
+        # --- FIX: 使用 TA_LIBRARY_PATH 環境變數，直接告訴 pip 函式庫的位置 ---
+        TA_LIBRARY_PATH=/usr/lib pip install TA-Lib
+        pip install pandas requests
     
     # 步驟 4: 執行我們的 V25 Python 掃描腳本
     - name: Run stock analyzer
       env:
         # 將我們存在 GitHub Secrets 的 Token 傳遞給 Python 腳本
         API_TOKEN: ${{ secrets.FINMIND_API_TOKEN }}
-      run: python V25_scanner.py
+      run: python V25_scanner_final.py # 使用最新的腳本檔名
 
     # 步驟 5: 將腳本產生變動的檔案 (index.html) 認可並推送回 repository
     - name: Commit and push changes
       run: |
         git config --global user.name 'github-actions[bot]'
         git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+        # 只 add index.html 和 state 檔案，避免 add 其他不應被追蹤的檔案
         git add index.html portfolio_state.json
         # 如果有變動，才執行 commit
         git diff --staged --quiet || git commit -m "每日自動更新交易計畫"
