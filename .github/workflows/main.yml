@@ -1,0 +1,49 @@
+# .github/workflows/main.yml
+# 這個檔案告訴 GitHub Actions 機器人該如何自動執行我們的任務
+
+name: Daily Stock Analysis
+
+# 觸發條件：設定排程
+on:
+  workflow_dispatch: # 允許手動觸發
+  schedule:
+    # 使用 UTC 時間，'0 8 * * 1-5' 代表台灣時間 (UTC+8) 下午 4 點，且只在週一到週五執行
+    - cron: '0 8 * * 1-5'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest # 使用最新的 Ubuntu 虛擬環境來執行
+
+    steps:
+    # 步驟 1: 取得你 repository 的最新程式碼
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    # 步驟 2: 設定 Python 環境
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9' # 指定 Python 版本
+
+    # 步驟 3: 安裝必要的 Python 套件
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pandas requests talib-binary
+    
+    # 步驟 4: 執行我們的 V25 Python 掃描腳本
+    - name: Run stock analyzer
+      env:
+        # 將我們存在 GitHub Secrets 的 Token 傳遞給 Python 腳本
+        API_TOKEN: ${{ secrets.FINMIND_API_TOKEN }}
+      run: python V25_daily_scanner.py
+
+    # 步驟 5: 將腳本產生變動的檔案 (trading_plan.json 和 index.html) 認可並推送回 repository
+    - name: Commit and push changes
+      run: |
+        git config --global user.name 'github-actions[bot]'
+        git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+        git add .
+        # 如果有變動，才執行 commit
+        git diff --staged --quiet || git commit -m "每日自動更新交易計畫"
+        git push
