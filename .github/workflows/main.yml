@@ -1,12 +1,12 @@
 # .github/workflows/main.yml
-# 這個檔案告訴 GitHub Actions 機器人該如何自動執行我們的任務
+# 這個檔案告訴 GitHub Actions 機器人該如何執行我們的任務
 
 name: Daily Stock Analysis
 
 # 觸發條件：設定排程
 on:
   workflow_dispatch: # 允許手動觸發
-  schedule:
+  schedule: # 啟用自動排程
     # 使用 UTC 時間，'0 8 * * 1-5' 代表台灣時間 (UTC+8) 下午 4 點，且只在週一到週五執行
     - cron: '0 8 * * 1-5'
 
@@ -41,14 +41,33 @@ jobs:
         # 設定安裝前綴到用戶目錄下的 local
         ./configure --prefix=${HOME}/local
         make
-        # 使用 DESTDIR 和 cp 來確保文件被正確安裝和移動到預期位置
+        # 使用 DESTDIR 來臨時安裝，並確保所有必要的文件都被複製到正確的位置
+        # DESTDIR 會將整個安裝結構放置在其下方，所以原始的 /usr/lib 會變成 /tmp/ta-lib-install-temp/usr/lib
         make install DESTDIR=/tmp/ta-lib-install-temp
+        
+        # 確保目標目錄存在
         mkdir -p ${HOME}/local/lib
         mkdir -p ${HOME}/local/include/ta-lib
-        cp -r /tmp/ta-lib-install-temp/usr/lib/* ${HOME}/local/lib/
-        cp -r /tmp/ta-lib-install-temp/usr/include/ta-lib/* ${HOME}/local/include/ta-lib/
+        
+        # 複製所有 TA-Lib 的庫文件到我們預期的目標位置
+        # 注意：根據 TA-Lib 的 make install 行為，/usr/lib 和 /usr/include 可能會直接在 DESTDIR 下
+        # 為了更安全，我們檢查實際的安裝路徑
+        if [ -d "/tmp/ta-lib-install-temp/usr/lib" ]; then
+          cp -r /tmp/ta-lib-install-temp/usr/lib/* ${HOME}/local/lib/
+        else
+          # 如果沒有 /usr/lib，則檢查是否直接在 DESTDIR/lib
+          cp -r /tmp/ta-lib-install-temp/lib/* ${HOME}/local/lib/
+        fi
+        
+        if [ -d "/tmp/ta-lib-install-temp/usr/include/ta-lib" ]; then
+          cp -r /tmp/ta-lib-install-temp/usr/include/ta-lib/* ${HOME}/local/include/ta-lib/
+        else
+          # 如果沒有 /usr/include/ta-lib，則檢查是否直接在 DESTDIR/include/ta-lib
+          cp -r /tmp/ta-lib-install-temp/include/ta-lib/* ${HOME}/local/include/ta-lib/
+        fi
+        
         # 診斷：檢查 TA-Lib 庫和頭文件是否存在於新路徑
-        echo "Verifying TA-Lib C library installation:"
+        echo "Verifying TA-Lib C library installation at final location:"
         ls -l ${HOME}/local/lib/libta-lib.so* # 檢查動態庫
         ls -l ${HOME}/local/include/ta-lib/ta_libc.h # 檢查頭文件
 
