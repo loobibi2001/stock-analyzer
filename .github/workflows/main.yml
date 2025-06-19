@@ -41,18 +41,19 @@ jobs:
         ./configure --prefix=/usr
         make
         sudo make install
-        sudo ldconfig # 更新動態連結器快取，確保系統能找到新安裝的函式庫
+        # 診斷：檢查 TA-Lib 庫和頭文件是否存在
+        echo "Verifying TA-Lib C library installation:"
+        ls -l /usr/lib/libta-lib.so* # 檢查動態庫
+        ls -l /usr/include/ta-lib/ta_libc.h # 檢查頭文件
 
     # 步驟 3.2: 安裝 Python 所需的套件
     - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
-        # 確保 LD_LIBRARY_PATH 包含 ta-lib 的安裝路徑，幫助 pip 找到函式庫
-        # 這一步是解決 "g++: fatal error: No such file or directory" 的關鍵
-        export LD_LIBRARY_PATH="/usr/lib:$LD_LIBRARY_PATH"
+        # 設置 TA_LIB_DIR 環境變數，顯式告知 TA-Lib 的 Python 綁定底層函式庫的位置
+        # 這是 TA-Lib Python 綁定官方推薦的查找方式，通常比 LD_LIBRARY_PATH 更可靠
+        export TA_LIB_DIR="/usr"
         pip install TA-Lib pandas requests
-        # 原來的 TA_LIBRARY_PATH=/usr/lib 在此通常就不需要了，
-        # 因為系統級別的 ldconfig 會讓 Python 的 ta-lib 找到它
 
     # 步驟 4: 執行我們的 V25 Python 掃描腳本
     - name: Run stock analyzer
