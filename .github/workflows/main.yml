@@ -20,13 +20,13 @@ jobs:
       uses: actions/checkout@v3
 
     # 步驟 1.5: 安裝必要的系統編譯套件
-    # 這是解決 ta-lib 編譯問題的關鍵，確保有 build-essential 和 Python 開發套件
+    # 這是解決 ta-lib 編譯問題的關鍵，確保有 build-essential (包含 gcc 和 g++) 和 Python 開發套件
     - name: Install system dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y build-essential python3-dev
 
-    # 步驟 2: 設定 Python 環境
+    # 2: 設定 Python 環境
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
@@ -47,7 +47,9 @@ jobs:
     - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
-        # 直接安裝 TA-Lib，因為上面 ldconfig 已更新系統連結器快取
+        # 確保 LD_LIBRARY_PATH 包含 ta-lib 的安裝路徑，幫助 pip 找到函式庫
+        # 這一步是解決 "g++: fatal error: No such file or directory" 的關鍵
+        export LD_LIBRARY_PATH="/usr/lib:$LD_LIBRARY_PATH"
         pip install TA-Lib pandas requests
         # 原來的 TA_LIBRARY_PATH=/usr/lib 在此通常就不需要了，
         # 因為系統級別的 ldconfig 會讓 Python 的 ta-lib 找到它
