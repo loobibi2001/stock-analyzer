@@ -1,0 +1,18 @@
+{
+    "overview": {
+        "totalEquity": 3000000
+    },
+    "holdings": [
+        {
+            "ticker": "2603",
+            "name": "長榮",
+            "shares": 10000,
+            "entryPrice": 160.2,
+            "stop_loss_price": 160.2,
+            "breakeven_stop_set": true,
+            "status": "風控升級"
+        }
+    ],
+    "buySignals": [],
+    "sellSignals": []
+}
