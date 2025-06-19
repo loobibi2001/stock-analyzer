@@ -38,10 +38,15 @@ jobs:
         wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz
         tar -xzf ta-lib-0.4.0-src.tar.gz
         cd ta-lib/
-        # 將 TA-Lib 安裝到用戶的主目錄下的 local 資料夾
+        # 設定安裝前綴到用戶目錄下的 local
         ./configure --prefix=${HOME}/local
         make
-        make install # 不需要 sudo，因為是安裝到用戶目錄
+        # 使用 DESTDIR 和 cp 來確保文件被正確安裝和移動到預期位置
+        make install DESTDIR=/tmp/ta-lib-install-temp
+        mkdir -p ${HOME}/local/lib
+        mkdir -p ${HOME}/local/include/ta-lib
+        cp -r /tmp/ta-lib-install-temp/usr/lib/* ${HOME}/local/lib/
+        cp -r /tmp/ta-lib-install-temp/usr/include/ta-lib/* ${HOME}/local/include/ta-lib/
         # 診斷：檢查 TA-Lib 庫和頭文件是否存在於新路徑
         echo "Verifying TA-Lib C library installation:"
         ls -l ${HOME}/local/lib/libta-lib.so* # 檢查動態庫
