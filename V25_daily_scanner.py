@@ -1,6 +1,6 @@
-# V25_daily_scanner.py
-# 版本: 2.0 (自動化版)
-# 功能: 每日盤後自動掃描、產生交易決策，並直接更新 index.html 檔案。
+# V25_scanner_with_metrics.py
+# 版本: 3.0 (歷史績效分析版)
+# 功能: 每日掃描，維護交易歷史，計算詳細績效指標，並直接更新 index.html。
 
 import os
 import json
@@ -10,12 +10,12 @@ import requests
 from datetime import datetime, timedelta
 import logging
 import re
+import numpy as np
 
 # --- 全域設定 ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-# --- FIX: 從環境變數讀取 API Token，以符合 GitHub Actions 的安全規範 ---
 API_TOKEN = os.getenv('API_TOKEN')
+ANNUAL_TRADING_DAYS = 252
 
 # --- 策略參數 ---
 CONSOLIDATION_PERIOD = 50
@@ -25,15 +25,14 @@ RSI_MAX_LEVEL = 70
 PROFIT_TARGET_RR = 1.5
 RISK_PER_TRADE_PCT = 0.015
 MAX_OPEN_POSITIONS = 6
-MIN_TRADE_SHARES = 1000
 MARKET_INDEX_ID = "TAIEX"
 
 # --- 檔案路徑 ---
 STATE_FILE = 'portfolio_state.json'
 STOCK_LIST_FILE = 'stock_list.txt'
-HTML_FILE = 'index.html' # 我們要更新的目標檔案
+HTML_FILE = 'index.html'
 
-# --- 核心函式 (與前版相同) ---
+# --- 核心函式 ---
 def get_stock_data_from_finmind(stock_id: str, days_to_fetch: int = 300) -> pd.DataFrame:
     try:
         end_date = datetime.now()
@@ -50,6 +49,7 @@ def get_stock_data_from_finmind(stock_id: str, days_to_fetch: int = 300) -> pd.D
         df = pd.DataFrame(data['data'])
         if df.empty: return df
         df['date'] = pd.to_datetime(df['date'])
+        df.rename(columns={'Trading_Volume': 'volume', 'max': 'high', 'min': 'low'}, inplace=True)
         return df.set_index('date')
     except Exception as e:
         logging.error(f"Failed to get {stock_id} data from FinMind: {e}")
@@ -60,20 +60,20 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df['SMA_50'] = talib.SMA(df['close'], timeperiod=50)
     df['SMA_200'] = talib.SMA(df['close'], timeperiod=200)
     df['RSI_14'] = talib.RSI(df['close'], timeperiod=14)
-    df['VOL_SMA_50'] = talib.SMA(df['Trading_Volume'], timeperiod=50)
-    df['Consolidation_High'] = df['max'].rolling(window=CONSOLIDATION_PERIOD).max()
-    df['Consolidation_Low'] = df['min'].rolling(window=CONSOLIDATION_PERIOD).min()
+    df['VOL_SMA_50'] = talib.SMA(df['volume'], timeperiod=50)
+    df['Consolidation_High'] = df['high'].rolling(window=CONSOLIDATION_PERIOD).max()
+    df['Consolidation_Low'] = df['low'].rolling(window=CONSOLIDATION_PERIOD).min()
     return df.dropna()
 
 def load_portfolio_state() -> dict:
     if not os.path.exists(STATE_FILE):
-        return {"cash": 5_000_000, "holdings": {}}
+        return {"initial_capital": 5_000_000, "cash": 5_000_000, "start_date": datetime.now().strftime('%Y-%m-%d'), "holdings": {}, "trade_history": [], "equity_curve": {}}
     try:
         with open(STATE_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
     except Exception as e:
         logging.error(f"Failed to read state file: {e}, using initial state.")
-        return {"cash": 5_000_000, "holdings": {}}
+        return {"initial_capital": 5_000_000, "cash": 5_000_000, "start_date": datetime.now().strftime('%Y-%m-%d'), "holdings": {}, "trade_history": [], "equity_curve": {}}
 
 def save_portfolio_state(state: dict):
     try:
@@ -82,101 +82,188 @@ def save_portfolio_state(state: dict):
     except Exception as e:
         logging.error(f"Failed to save state file: {e}")
 
-# --- 決策產生函式 (與前版相同，但加入最新價格計算) ---
-def find_buy_signals(stock_pool: list, market_data: pd.DataFrame, all_stock_data: dict) -> list:
-    buy_signals = []
-    if market_data.empty or market_data.iloc[-1]['close'] < market_data.iloc[-1]['SMA_200']:
-        logging.info("Bear market, no buy signals today.")
-        return []
-    for stock_id in stock_pool:
-        df = all_stock_data.get(stock_id)
-        if df is None or len(df) < 2: continue
-        latest, previous = df.iloc[-1], df.iloc[-2]
-        is_breaking_out = previous['close'] < previous['Consolidation_High'] and latest['close'] > previous['Consolidation_High']
-        is_rsi_ok = RSI_MIN_LEVEL < latest['RSI_14'] < RSI_MAX_LEVEL
-        is_volume_ok = latest['Trading_Volume'] > (latest['VOL_SMA_50'] * VOLUME_SPIKE_MULT)
-        if is_breaking_out and is_rsi_ok and is_volume_ok:
-            buy_signals.append({"ticker": stock_id, "name": "", "stopLoss": latest['Consolidation_Low'], "signalPrice": latest['close']})
-    return buy_signals
-
-def generate_exit_signals_and_update_holdings(portfolio_state: dict, all_stock_data: dict):
-    sell_signals = []
-    holdings = portfolio_state['holdings']
-    total_holdings_value = 0
-    total_pnl = 0
-
-    for stock_id, pos_info in list(holdings.items()):
-        df = all_stock_data.get(stock_id)
-        if df is None or df.empty:
-            pos_info['currentPrice'] = pos_info['entryPrice'] # 數據獲取失敗則使用進場價
-            pos_info['pnl'] = 0
-            total_holdings_value += pos_info['currentPrice'] * pos_info['shares']
-            continue
-        
-        latest = df.iloc[-1]
-        pos_info['currentPrice'] = latest['close']
-        pos_info['pnl'] = (latest['close'] - pos_info['entryPrice']) * pos_info['shares']
-        total_holdings_value += pos_info['currentPrice'] * pos_info['shares']
-        total_pnl += pos_info['pnl']
-        
-        exit_reason = None
-        if latest['min'] <= pos_info['stop_loss_price']:
-            exit_reason = "觸及初始停損" if not pos_info['breakeven_stop_set'] else "觸及盈虧平衡停損"
-        elif not pos_info['breakeven_stop_set'] and latest['max'] >= (pos_info['entryPrice'] + (pos_info['entryPrice'] - pos_info['stop_loss_price']) * PROFIT_TARGET_RR):
-             pos_info['breakeven_stop_set'] = True
-             pos_info['stop_loss_price'] = pos_info['entryPrice']
-             logging.info(f"持股 {stock_id} 風控升級，停損點移至 {pos_info['entryPrice']}.")
-        elif pos_info['breakeven_stop_set'] and latest['close'] < latest['SMA_50']:
-            exit_reason = "觸及追蹤停利 (50MA)"
-        
-        if exit_reason:
-            sell_signals.append({"ticker": stock_id, "name": pos_info.get("name", ""), "reason": exit_reason})
-    
-    portfolio_state['overview'] = {
-        "totalEquity": portfolio_state['cash'] + total_holdings_value,
-        "cash": portfolio_state['cash'],
-        "holdingsValue": total_holdings_value,
-        "netPL": total_pnl
-    }
-    return sell_signals
-
-# --- FIX: 新增函式，自動更新 HTML 檔案 ---
 def update_html_file(trading_plan: dict):
-    """讀取 index.html，並將最新的交易計畫數據注入其中"""
     try:
         with open(HTML_FILE, 'r', encoding='utf-8') as f:
             html_content = f.read()
-
-        # 使用正則表達式找到 tradingPlanData 變數並替換其內容
-        # 這比簡單的字串替換更穩健
         json_string = json.dumps(trading_plan, indent=4, ensure_ascii=False)
-        
-        # re.DOTALL 讓 '.' 可以匹配換行符
         pattern = re.compile(r"(const tradingPlanData = )(\{.*?\});", re.DOTALL)
-        
         if not pattern.search(html_content):
-            logging.error(f"在 {HTML_FILE} 中找不到 'const tradingPlanData = {{...}};' 的模式。")
+            logging.error(f"In {HTML_FILE} can't find 'const tradingPlanData = {{...}};' pattern.")
             return
-
         new_html_content = pattern.sub(f"\\1{json_string};", html_content, count=1)
-
         with open(HTML_FILE, 'w', encoding='utf-8') as f:
             f.write(new_html_content)
-        
-        logging.info(f"已成功將最新交易計畫更新至 {HTML_FILE}")
-
-    except FileNotFoundError:
-        logging.error(f"找不到 HTML 檔案: {HTML_FILE}")
+        logging.info(f"Successfully updated trading plan in {HTML_FILE}")
     except Exception as e:
-        logging.error(f"更新 HTML 檔案失敗: {e}")
+        logging.error(f"Failed to update HTML file: {e}")
 
+# --- 新增: 績效計算核心函式 ---
+def calculate_performance_metrics(state: dict) -> dict:
+    trade_history = state.get("trade_history", [])
+    if not trade_history:
+        return {}
+
+    trades_df = pd.DataFrame(trade_history)
+    trades_df['pnl_percent'] = (trades_df['pnl_net'] / trades_df['entry_value']) * 100
+    
+    total_trades = len(trades_df)
+    winning_trades = trades_df[trades_df['pnl_net'] > 0]
+    losing_trades = trades_df[trades_df['pnl_net'] <= 0]
+    
+    win_rate = (len(winning_trades) / total_trades) * 100 if total_trades > 0 else 0
+    
+    gross_profit = winning_trades['pnl_gross'].sum()
+    gross_loss = abs(losing_trades['pnl_gross'].sum())
+    
+    profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
+    
+    avg_win = winning_trades['pnl_net'].mean()
+    avg_loss = losing_trades['pnl_net'].mean()
+    payoff_ratio = abs(avg_win / avg_loss) if avg_loss != 0 else float('inf')
+
+    # 計算權益曲線與回撤
+    equity_series = pd.Series(state['equity_curve']).sort_index()
+    equity_series.index = pd.to_datetime(equity_series.index)
+    
+    peak = equity_series.expanding(min_periods=1).max()
+    drawdown = (equity_series - peak) / peak
+    max_drawdown = abs(drawdown.min() * 100) if not drawdown.empty else 0
+    
+    # 計算年化報酬率 & 夏普比率
+    total_days = (datetime.now() - datetime.strptime(state['start_date'], '%Y-%m-%d')).days
+    years = total_days / 365.25 if total_days > 0 else 0
+    final_equity = equity_series.iloc[-1]
+    cagr = ((final_equity / state['initial_capital'])**(1/years) - 1) * 100 if years > 0 else 0
+    
+    daily_returns = equity_series.pct_change().dropna()
+    sharpe_ratio = (daily_returns.mean() / daily_returns.std()) * np.sqrt(ANNUAL_TRADING_DAYS) if not daily_returns.empty and daily_returns.std() != 0 else 0
+
+    return {
+        "netProfitDollar": final_equity - state['initial_capital'],
+        "netProfitPercent": ((final_equity / state['initial_capital']) - 1) * 100,
+        "finalEquity": final_equity,
+        "cagrPercent": cagr,
+        "maxDrawdownPercent": max_drawdown,
+        "sharpeRatio": sharpe_ratio,
+        "totalTrades": total_trades,
+        "winRatePercent": win_rate,
+        "profitFactor": profit_factor,
+        "payoffRatio": payoff_ratio,
+        "grossProfitDollar": gross_profit,
+        "grossLossDollar": gross_loss,
+        "totalCostDollar": trades_df['trade_cost'].sum(),
+        "avgProfitPercent": winning_trades['pnl_percent'].mean(),
+        "avgLossPercent": losing_trades['pnl_percent'].mean(),
+        "maxProfitPercent": trades_df['pnl_percent'].max(),
+        "maxLossPercent": trades_df['pnl_percent'].min(),
+        "avgHoldingDays": trades_df['holding_days'].mean(),
+        "avgWinHoldingDays": winning_trades['holding_days'].mean(),
+        "avgLossHoldingDays": losing_trades['holding_days'].mean(),
+        "backtestDays": total_days,
+    }
+
+def process_daily_signals(portfolio_state, all_stock_data, stock_pool):
+    # 處理出場
+    holdings = portfolio_state['holdings']
+    trade_history = portfolio_state['trade_history']
+    today_str = datetime.now().strftime('%Y-%m-%d')
+    sell_signals = []
+
+    for stock_id, pos_info in list(holdings.items()):
+        df = all_stock_data.get(stock_id)
+        if df is None or df.empty: continue
+        
+        latest = df.iloc[-1]
+        exit_reason = None
+        
+        # ... (出場邏輯與前版相同) ...
+        if latest['low'] <= pos_info['stop_loss_price']:
+            exit_reason = "觸及停損"
+        elif pos_info['breakeven_stop_set'] and latest['close'] < latest['SMA_50']:
+            exit_reason = "觸及追蹤停利 (50MA)"
+
+        if exit_reason:
+            sell_signals.append({"ticker": stock_id, "name": pos_info.get("name", ""), "reason": exit_reason})
+            
+            # 記錄已完成的交易
+            exit_price = latest['close'] # 簡化為收盤價
+            entry_value = pos_info['entryPrice'] * pos_info['shares']
+            exit_value = exit_price * pos_info['shares']
+            pnl_gross = exit_value - entry_value
+            trade_cost = entry_value * 0.001425 + exit_value * (0.001425 + 0.003)
+            pnl_net = pnl_gross - trade_cost
+            
+            trade_history.append({
+                "stock_id": stock_id,
+                "entry_date": pos_info['entryDate'],
+                "exit_date": today_str,
+                "entry_price": pos_info['entryPrice'],
+                "exit_price": exit_price,
+                "shares": pos_info['shares'],
+                "entry_value": entry_value,
+                "pnl_gross": pnl_gross,
+                "pnl_net": pnl_net,
+                "trade_cost": trade_cost,
+                "holding_days": (datetime.now() - datetime.strptime(pos_info['entryDate'], '%Y-%m-%d')).days
+            })
+            portfolio_state['cash'] += exit_value * (1 - 0.001425 - 0.003)
+            del holdings[stock_id]
+            logging.info(f"平倉 {stock_id}，原因: {exit_reason}，淨利: {pnl_net:.2f}")
+
+        # 更新未平倉部位的風控
+        elif not pos_info['breakeven_stop_set'] and latest['high'] >= (pos_info['entryPrice'] + (pos_info['entryPrice'] - pos_info['stop_loss_price']) * PROFIT_TARGET_RR):
+            pos_info['breakeven_stop_set'] = True
+            pos_info['stop_loss_price'] = pos_info['entryPrice']
+            pos_info['status'] = "風控升級"
+            logging.info(f"持股 {stock_id} 風控升級.")
+
+    # 處理進場
+    market_df = all_stock_data[MARKET_INDEX_ID]
+    buy_signals_raw = []
+    if not market_df.empty and market_df.iloc[-1]['close'] > market_df.iloc[-1]['SMA_200']:
+        for stock_id in stock_pool:
+            if stock_id in holdings: continue
+            df = all_stock_data.get(stock_id)
+            if df is None or len(df) < 2: continue
+            latest, previous = df.iloc[-1], df.iloc[-2]
+            # ... (進場邏輯與前版相同) ...
+            if previous['close'] < previous['Consolidation_High'] and latest['close'] > previous['Consolidation_High'] and RSI_MIN_LEVEL < latest['RSI_14'] < RSI_MAX_LEVEL and latest['volume'] > (latest['VOL_SMA_50'] * VOLUME_SPIKE_MULT):
+                buy_signals_raw.append({"ticker": stock_id, "name": "", "stopLoss": latest['Consolidation_Low'], "signalPrice": latest['close']})
+
+    # 計算倉位大小並執行進場
+    buy_signals = []
+    total_equity = portfolio_state['cash'] + sum(p['currentPrice'] * p['shares'] for p in holdings.values() if 'currentPrice' in p)
+    available_slots = MAX_OPEN_POSITIONS - len(holdings)
+    for signal in buy_signals_raw:
+        if len(buy_signals) >= available_slots: break
+        risk_per_share = signal['signalPrice'] - signal['stopLoss']
+        if risk_per_share <= 0: continue
+        dollar_to_risk = total_equity * RISK_PER_TRADE_PCT
+        shares_to_buy = int((dollar_to_risk / risk_per_share) / 1000) * 1000
+        if shares_to_buy > 0:
+            cost = shares_to_buy * signal['signalPrice']
+            if portfolio_state['cash'] > cost * (1 + 0.001425):
+                portfolio_state['cash'] -= cost * (1 + 0.001425)
+                holdings[signal['ticker']] = {
+                    "ticker": signal['ticker'], "name": signal['name'], "shares": shares_to_buy,
+                    "entryPrice": signal['signalPrice'], "entryDate": today_str,
+                    "stop_loss_price": signal['stopLoss'], "breakeven_stop_set": False, "status": "初始停損"
+                }
+                signal['sharesToBuy'] = shares_to_buy
+                signal['estimatedCost'] = cost
+                buy_signals.append(signal)
+                logging.info(f"建立新倉位 {signal['ticker']}，股數: {shares_to_buy}")
+
+    return buy_signals, sell_signals
 
 def main():
-    logging.info("--- 開始執行 V25 自動化掃描任務 ---")
+    logging.info("--- 開始執行 V25 自動化掃描任務 (含績效分析) ---")
     if not API_TOKEN:
-        logging.error("錯誤：找不到 API_TOKEN 環境變數。請在 GitHub Secrets 中設定。")
+        logging.error("錯誤：找不到 API_TOKEN 環境變數。")
         return
 
+    portfolio_state = load_portfolio_state()
     try:
         with open(STOCK_LIST_FILE, 'r') as f:
             stock_pool = [line.strip() for line in f if line.strip()]
@@ -184,45 +271,48 @@ def main():
         logging.error(f"找不到股票列表檔案: {STOCK_LIST_FILE}，任務中止。")
         return
         
-    portfolio_state = load_portfolio_state()
-    
     all_stock_data = {}
     logging.info("正在獲取市場數據...")
-    market_df_raw = get_stock_data_from_finmind(MARKET_INDEX_ID)
-    market_df = calculate_indicators(market_df_raw)
-    all_stock_data[MARKET_INDEX_ID] = market_df
-
-    stocks_to_fetch = set(stock_pool + list(portfolio_state['holdings'].keys()))
+    stocks_to_fetch = set(stock_pool + list(portfolio_state['holdings'].keys()) + [MARKET_INDEX_ID])
     for stock_id in stocks_to_fetch:
         df_raw = get_stock_data_from_finmind(stock_id)
         all_stock_data[stock_id] = calculate_indicators(df_raw)
 
-    sell_signals = generate_exit_signals_and_update_holdings(portfolio_state, all_stock_data)
-    buy_signals_raw = find_buy_signals(stock_pool, market_df, all_stock_data)
+    buy_signals, sell_signals = process_daily_signals(portfolio_state, all_stock_data, stock_pool)
+
+    # 更新當前持股的最新價格和損益
+    total_holdings_value = 0
+    for stock_id, pos_info in portfolio_state['holdings'].items():
+        if stock_id in all_stock_data and not all_stock_data[stock_id].empty:
+            latest_price = all_stock_data[stock_id].iloc[-1]['close']
+            pos_info['currentPrice'] = latest_price
+            pos_info['pnl'] = (latest_price - pos_info['entryPrice']) * pos_info['shares']
+            total_holdings_value += latest_price * pos_info['shares']
+
+    # 更新並記錄每日權益
+    today_str = datetime.now().strftime('%Y-%m-%d')
+    current_equity = portfolio_state['cash'] + total_holdings_value
+    portfolio_state['equity_curve'][today_str] = current_equity
     
-    buy_signals = []
-    available_slots = MAX_OPEN_POSITIONS - len(portfolio_state['holdings'])
-    for signal in buy_signals_raw:
-        if len(buy_signals) >= available_slots: break
-        risk_per_share = signal['signalPrice'] - signal['stopLoss']
-        if risk_per_share <= 0: continue
-        dollar_to_risk = portfolio_state['overview']['totalEquity'] * RISK_PER_TRADE_PCT
-        shares_to_buy = int((dollar_to_risk / risk_per_share) / 1000) * 1000 # 無條件捨去到千位
-        if shares_to_buy > 0:
-            signal['sharesToBuy'] = shares_to_buy
-            signal['estimatedCost'] = shares_to_buy * signal['signalPrice']
-            buy_signals.append(signal)
+    # 計算最終績效指標
+    performance_metrics = calculate_performance_metrics(portfolio_state)
 
     # 組合最終的交易計畫
     final_trading_plan = {
-        "overview": portfolio_state['overview'],
+        "overview": {
+            "cash": portfolio_state['cash'],
+            "holdingsValue": total_holdings_value,
+            "netPL": sum(p.get('pnl', 0) for p in portfolio_state['holdings'].values())
+        },
         "holdings": list(portfolio_state['holdings'].values()),
         "buySignals": buy_signals,
-        "sellSignals": sell_signals
+        "sellSignals": sell_signals,
+        "performance_metrics": performance_metrics
     }
     
-    # 更新 HTML 檔案
+    # 更新 HTML 並儲存狀態
     update_html_file(final_trading_plan)
+    save_portfolio_state(portfolio_state)
 
     logging.info("--- V25 自動化掃描任務執行完畢 ---")
 
