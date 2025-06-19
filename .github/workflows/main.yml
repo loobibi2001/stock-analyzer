@@ -53,9 +53,10 @@ jobs:
         mkdir -p ${HOME}/local/include/ta-lib
         
         # 精確複製動態庫和頭文件到最終目標位置
-        # 使用 find 和 install 命令來處理複製，這通常更穩定
-        find /tmp/ta-lib-install-temp${HOME}/local/lib -name "libta_lib.so*" -exec cp {} ${HOME}/local/lib/ \;
-        cp -r /tmp/ta-lib-install-temp${HOME}/local/include/ta-lib/. ${HOME}/local/include/ta-lib/
+        # 直接複製臨時安裝目錄下的 lib 和 include 目錄內容到最終目標
+        # 這應該是最直接且最穩健的複製方式
+        cp -r /tmp/ta-lib-install-temp${HOME}/local/lib/* ${HOME}/local/lib/
+        cp -r /tmp/ta-lib-install-temp${HOME}/local/include/ta-lib/* ${HOME}/local/include/ta-lib/
         
         # 診斷：檢查 TA-Lib 庫和頭文件是否存在於最終安裝路徑
         echo "Verifying TA-Lib C library installation at final location:"
