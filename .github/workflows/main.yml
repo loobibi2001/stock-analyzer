@@ -48,14 +48,14 @@ jobs:
         echo "Contents of /tmp/ta-lib-install-temp:"
         ls -R /tmp/ta-lib-install-temp
         
-        # 確保目標目錄存在
+        # 確保目標目錄存在，這一步非常重要，確保在複製前目錄就已建立
         mkdir -p ${HOME}/local/lib
         mkdir -p ${HOME}/local/include/ta-lib
         
         # 複製所有 TA-Lib 的庫文件和頭文件到我們預期的最終目標位置
-        # 注意：這裡的複製路徑是基於 DESTDIR 和 configure --prefix 的組合
-        cp -r /tmp/ta-lib-install-temp${HOME}/local/lib/* ${HOME}/local/lib/
-        cp -r /tmp/ta-lib-install-temp${HOME}/local/include/ta-lib/* ${HOME}/local/include/ta-lib/
+        # 這裡直接從 DESTDIR 和 prefix 組成的路徑複製
+        cp -r /tmp/ta-lib-install-temp${HOME}/local/lib/. ${HOME}/local/lib/
+        cp -r /tmp/ta-lib-install-temp${HOME}/local/include/ta-lib/. ${HOME}/local/include/ta-lib/
         
         # 診斷：檢查 TA-Lib 庫和頭文件是否存在於最終安裝路徑
         echo "Verifying TA-Lib C library installation at final location:"
