@@ -38,21 +38,22 @@ jobs:
         wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz
         tar -xzf ta-lib-0.4.0-src.tar.gz
         cd ta-lib/
-        ./configure --prefix=/usr
+        # 將 TA-Lib 安裝到用戶的主目錄下的 local 資料夾
+        ./configure --prefix=${HOME}/local
         make
-        sudo make install
-        # 診斷：檢查 TA-Lib 庫和頭文件是否存在
+        make install # 不需要 sudo，因為是安裝到用戶目錄
+        # 診斷：檢查 TA-Lib 庫和頭文件是否存在於新路徑
         echo "Verifying TA-Lib C library installation:"
-        ls -l /usr/lib/libta-lib.so* # 檢查動態庫
-        ls -l /usr/include/ta-lib/ta_libc.h # 檢查頭文件
+        ls -l ${HOME}/local/lib/libta-lib.so* # 檢查動態庫
+        ls -l ${HOME}/local/include/ta-lib/ta_libc.h # 檢查頭文件
 
     # 步驟 3.2: 安裝 Python 所需的套件
     - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
-        # 設置 TA_LIB_DIR 環境變數，顯式告知 TA-Lib 的 Python 綁定底層函式庫的位置
-        # 這是 TA-Lib Python 綁定官方推薦的查找方式，通常比 LD_LIBRARY_PATH 更可靠
-        export TA_LIB_DIR="/usr"
+        # 設置 TA_LIB_DIR 環境變數，明確告知 TA-Lib 的 Python 綁定底層函式庫的位置
+        # 指向我們新安裝的 ~/local 目錄
+        export TA_LIB_DIR="${HOME}/local"
         pip install TA-Lib pandas requests
 
     # 步驟 4: 執行我們的 V25 Python 掃描腳本
